@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tg-box-reporter"
+version = "0.1.0"
+description = "Generic host/container collector with a Telegram relay"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "OpenAI Codex" }]
+
+[project.scripts]
+tg-box-collector = "tg_box_reporter.collector:main"
+tg-box-relay = "tg_box_reporter.relay:main"
+
+[tool.setuptools.packages.find]
+include = ["tg_box_reporter*"]

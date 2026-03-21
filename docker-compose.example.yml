@@ -1,0 +1,71 @@
+services:
+  collector:
+    build:
+      context: .
+    image: tg-box-reporter:local
+    command: ["python", "-m", "tg_box_reporter.collector"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9707:9707"
+    environment:
+      COLLECTOR_BIND_HOST: "0.0.0.0"
+      COLLECTOR_PORT: "9707"
+      COLLECTOR_HOST_PROC: "/host/proc"
+      COLLECTOR_HOST_ROOT: "/hostfs"
+      COLLECTOR_DISK_PATH: "/hostfs"
+      COLLECTOR_INCLUDE_STOPPED: "${COLLECTOR_INCLUDE_STOPPED:-1}"
+      COLLECTOR_REQUIRE_DOCKER: "${COLLECTOR_REQUIRE_DOCKER:-0}"
+      COLLECTOR_ALERT_LOAD_PER_CPU_GT: "${COLLECTOR_ALERT_LOAD_PER_CPU_GT:-1.5}"
+      COLLECTOR_ALERT_MEM_PERCENT_GT: "${COLLECTOR_ALERT_MEM_PERCENT_GT:-90}"
+      COLLECTOR_ALERT_SWAP_USED_MB_GT: "${COLLECTOR_ALERT_SWAP_USED_MB_GT:-256}"
+      COLLECTOR_ALERT_DISK_PERCENT_GT: "${COLLECTOR_ALERT_DISK_PERCENT_GT:-90}"
+      COLLECTOR_ALERT_CONTAINER_RESTART_COUNT_GT: "${COLLECTOR_ALERT_CONTAINER_RESTART_COUNT_GT:-5}"
+      COLLECTOR_ALERT_CONTAINER_CPU_PERCENT_GT: "${COLLECTOR_ALERT_CONTAINER_CPU_PERCENT_GT:-85}"
+      COLLECTOR_ALERT_CONTAINER_MEM_PERCENT_GT: "${COLLECTOR_ALERT_CONTAINER_MEM_PERCENT_GT:-85}"
+      COLLECTOR_DOCKER_TIMEOUT_SECONDS: "${COLLECTOR_DOCKER_TIMEOUT_SECONDS:-10}"
+    volumes:
+      - /proc:/host/proc:ro
+      - /:/hostfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "from urllib.request import urlopen; import os, sys; timeout=max(15.0, float(os.environ.get('COLLECTOR_DOCKER_TIMEOUT_SECONDS', '10')) + 5.0); sys.exit(0 if urlopen('http://127.0.0.1:9707/readyz', timeout=timeout).status == 200 else 1)",
+        ]
+      interval: 30s
+      timeout: 90s
+      retries: 3
+      start_period: 10s
+
+  relay:
+    build:
+      context: .
+    image: tg-box-reporter:local
+    command: ["python", "-m", "tg_box_reporter.relay"]
+    restart: unless-stopped
+    depends_on:
+      collector:
+        condition: service_healthy
+    environment:
+      TG_BOT_TOKEN: "${TG_BOT_TOKEN:?set TG_BOT_TOKEN}"
+      TG_CHAT_ID: "${TG_CHAT_ID:?set TG_CHAT_ID}"
+      TG_ALLOWED_CHAT_IDS: "${TG_ALLOWED_CHAT_IDS:-}"
+      TG_API_BASE: "${TG_API_BASE:-https://api.telegram.org}"
+      COLLECTOR_URL: "http://collector:9707/snapshot"
+      RELAY_MODE: "${RELAY_MODE:-hybrid}"
+      RELAY_INTERVAL_SECONDS: "${RELAY_INTERVAL_SECONDS:-900}"
+      RELAY_STARTUP_REPORT: "${RELAY_STARTUP_REPORT:-0}"
+      RELAY_REQUEST_TIMEOUT_SECONDS: "${RELAY_REQUEST_TIMEOUT_SECONDS:-20}"
+      TG_GET_UPDATES_TIMEOUT_SECONDS: "${TG_GET_UPDATES_TIMEOUT_SECONDS:-30}"
+      REPORT_MAX_CONTAINERS: "${REPORT_MAX_CONTAINERS:-10}"
+      RELAY_HEARTBEAT_PATH: "${RELAY_HEARTBEAT_PATH:-/tmp/tg-box-reporter-relay.heartbeat}"
+      RELAY_HEALTH_STALE_SECONDS: "${RELAY_HEALTH_STALE_SECONDS:-120}"
+    healthcheck:
+      test: ["CMD", "python", "-m", "tg_box_reporter.relay_health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

@@ -1,0 +1,19 @@
+[Unit]
+Description=Telegram Box Reporter Collector
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/tg-box-reporter
+EnvironmentFile=-/etc/tg-box-reporter/collector.env
+ExecStart=/usr/bin/env python3 -m tg_box_reporter.collector
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
