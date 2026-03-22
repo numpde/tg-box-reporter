@@ -2,7 +2,15 @@ from __future__ import annotations
 
 import unittest
 
-from tg_box_reporter.formatting import format_events, format_problems, format_report, format_summary, split_message
+from tg_box_reporter.formatting import (
+    format_alert_record,
+    format_alerts,
+    format_events,
+    format_problems,
+    format_report,
+    format_summary,
+    split_message,
+)
 
 
 class FormattingTests(unittest.TestCase):
@@ -134,6 +142,63 @@ class FormattingTests(unittest.TestCase):
         self.assertIn("ingest enabled yes", rendered)
         self.assertIn("polls_hit", rendered)
         self.assertIn("route=/polls", rendered)
+
+    def test_format_alerts_includes_feed_metadata_and_items(self) -> None:
+        payload = {
+            "generated_at_utc": "2026-03-21T00:00:00Z",
+            "alerts_enabled": True,
+            "emitted_total": 2,
+            "retained_total": 1,
+            "retention_seconds": 86400,
+            "oldest_seq": 2,
+            "latest_seq": 2,
+            "after": 1,
+            "truncated": False,
+            "alerts": [
+                {
+                    "seq": 2,
+                    "alert_class": "route_error_rate_high",
+                    "transition": "opened",
+                    "severity": "warning",
+                    "env": "prod",
+                    "source": "vote-mcp",
+                    "method": "GET",
+                    "route": "/polls",
+                    "name": "polls_hit",
+                    "summary": "prod GET /polls error rate 2/3 in 5m0s",
+                    "detail": "vote-mcp GET /polls saw 2 matching errors across 3 requests in the last 5m0s",
+                    "labels": {"kind": "http.request", "status": "500"},
+                }
+            ],
+        }
+
+        rendered = format_alerts(payload)
+
+        self.assertIn("alerts enabled yes", rendered)
+        self.assertIn("seq oldest=2 latest=2 after=1 truncated=no", rendered)
+        self.assertIn("route_error_rate_high", rendered)
+        self.assertIn("summary=prod GET /polls error rate 2/3 in 5m0s", rendered)
+
+    def test_format_alert_record_renders_summary_and_stats(self) -> None:
+        rendered = format_alert_record(
+            {
+                "seq": 3,
+                "alert_class": "route_seen_after_quiet_period",
+                "transition": "noticed",
+                "severity": "info",
+                "env": "demo",
+                "source": "vote-mcp",
+                "method": "GET",
+                "route": "/polls",
+                "summary": "demo GET /polls seen after 6h0m0s quiet",
+                "detail": "vote-mcp GET /polls received traffic after 6h0m0s without a matching event",
+                "stats": {"observed_quiet_seconds": 21600},
+            }
+        )
+
+        self.assertIn("alert seq=3", rendered)
+        self.assertIn("route_seen_after_quiet_period", rendered)
+        self.assertIn("observed_quiet_seconds=21600", rendered)
 
 
 if __name__ == "__main__":

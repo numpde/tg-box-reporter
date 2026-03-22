@@ -5,10 +5,19 @@ import posixpath
 import sys
 import time
 from urllib import request
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from .config import RelayConfig
-from .formatting import format_containers, format_events, format_problems, format_report, format_summary, split_message
+from .formatting import (
+    format_alert_record,
+    format_alerts,
+    format_containers,
+    format_events,
+    format_problems,
+    format_report,
+    format_summary,
+    split_message,
+)
 from .relay_health import RelayHeartbeat
 from .telegram_api import TelegramClient
 
@@ -18,6 +27,7 @@ COMMAND_REPORT_TYPES = {
     "/containers": "containers",
     "/problems": "problems",
     "/events": "events",
+    "/alerts": "alerts",
 }
 HELP_TEXT = "\n".join([*COMMAND_REPORT_TYPES, "/help"])
 
@@ -33,16 +43,32 @@ class CollectorClient:
     def fetch_events(self) -> dict[str, object]:
         return self._fetch(self._projection_url("/events"))
 
+    def fetch_alerts(self, *, after_seq: int | None = None, limit: int | None = None) -> dict[str, object]:
+        query: dict[str, str] = {}
+        if after_seq is not None:
+            query["after"] = str(after_seq)
+        if limit is not None:
+            query["limit"] = str(limit)
+        return self._fetch(self._projection_url("/alerts", query=query))
+
     def _fetch(self, url: str) -> dict[str, object]:
         with request.urlopen(url, timeout=self.timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))
 
-    def _projection_url(self, path: str) -> str:
+    def _projection_url(self, path: str, *, query: dict[str, str] | None = None) -> str:
         parsed = urlsplit(self.snapshot_url)
         current_path = parsed.path or "/snapshot"
         base_dir = posixpath.dirname(current_path.rstrip("/"))
         normalized_path = posixpath.join(base_dir or "/", path.lstrip("/"))
-        return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, "", ""))
+        return urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                normalized_path,
+                urlencode(query or {}),
+                "",
+            )
+        )
 
 
 class RelayService:
@@ -64,13 +90,17 @@ class RelayService:
         self.clock = clock
         self.sleep_fn = sleep_fn
         self.stderr = stderr
+        self._last_alert_seq = 0
 
     def run(self) -> int:
         next_report_at = self.clock()
         if not self.config.startup_report:
             next_report_at += self.config.interval_seconds
+        next_alert_at = self.clock() + self.config.alert_poll_seconds
         offset: int | None = None
 
+        if self._alerts_enabled():
+            self._safe_initialize_alert_cursor()
         self._mark_alive()
         while True:
             self._mark_alive()
@@ -78,12 +108,18 @@ class RelayService:
             if self._scheduled_enabled() and now >= next_report_at:
                 self._safe_send_report(self.config.chat_id, "report")
                 next_report_at = self.clock() + self.config.interval_seconds
+            if self._alerts_enabled() and now >= next_alert_at:
+                self._safe_send_pending_alerts()
+                next_alert_at = self.clock() + self.config.alert_poll_seconds
 
             if self._polling_enabled():
                 poll_timeout = self.config.get_updates_timeout_seconds
                 if self._scheduled_enabled():
                     remaining = max(1, int(next_report_at - self.clock()))
                     poll_timeout = min(poll_timeout, remaining)
+                if self._alerts_enabled():
+                    remaining_alert = max(1, int(next_alert_at - self.clock()))
+                    poll_timeout = min(poll_timeout, remaining_alert)
                 try:
                     updates = self.telegram.get_updates(offset=offset, timeout=poll_timeout)
                 except Exception as exc:
@@ -101,7 +137,13 @@ class RelayService:
                 continue
 
             self._mark_alive()
-            sleep_for = max(1.0, next_report_at - self.clock())
+            wake_times = []
+            if self._scheduled_enabled():
+                wake_times.append(next_report_at)
+            if self._alerts_enabled():
+                wake_times.append(next_alert_at)
+            next_wake_at = min(wake_times) if wake_times else self.clock() + 1.0
+            sleep_for = max(1.0, next_wake_at - self.clock())
             max_sleep = max(1.0, float(self.config.health_stale_seconds) / 2.0)
             self.sleep_fn(min(sleep_for, max_sleep))
 
@@ -146,10 +188,48 @@ class RelayService:
             self.stderr.write(f"relay error: {exc}\n")
             self.stderr.flush()
 
+    def _safe_send_pending_alerts(self) -> None:
+        try:
+            self.send_pending_alerts()
+        except Exception as exc:
+            self.stderr.write(f"relay alert error: {exc}\n")
+            self.stderr.flush()
+
+    def _safe_initialize_alert_cursor(self) -> None:
+        try:
+            self.initialize_alert_cursor()
+        except Exception as exc:
+            self.stderr.write(f"relay alert init error: {exc}\n")
+            self.stderr.flush()
+
     def send_report(self, chat_id: str, report_type: str) -> None:
         text = self._render_report(report_type)
         for chunk in split_message(text):
             self.telegram.send_message(chat_id=chat_id, text=chunk)
+
+    def send_pending_alerts(self) -> None:
+        payload = self.collector_client.fetch_alerts(
+            after_seq=self._last_alert_seq,
+            limit=self.config.alert_batch_size,
+        )
+        if payload.get("truncated"):
+            self.stderr.write(
+                "relay alert gap detected: "
+                f"after={payload.get('after')} oldest_seq={payload.get('oldest_seq')}\n"
+            )
+            self.stderr.flush()
+        alerts = list(payload.get("alerts") or [])
+        for alert in alerts:
+            text = format_alert_record(alert)
+            for chunk in split_message(text):
+                self.telegram.send_message(chat_id=self.config.chat_id, text=chunk)
+            seq = int(alert.get("seq") or 0)
+            if seq > self._last_alert_seq:
+                self._last_alert_seq = seq
+
+    def initialize_alert_cursor(self) -> None:
+        payload = self.collector_client.fetch_alerts(limit=1)
+        self._last_alert_seq = int(payload.get("latest_seq") or 0)
 
     def _render_report(self, report_type: str) -> str:
         if report_type == "report":
@@ -166,6 +246,8 @@ class RelayService:
             return format_problems(snapshot)
         if report_type == "events":
             return format_events(self.collector_client.fetch_events())
+        if report_type == "alerts":
+            return format_alerts(self.collector_client.fetch_alerts(limit=self.config.alert_batch_size))
         raise ValueError(f"unknown report type: {report_type}")
 
     def _scheduled_enabled(self) -> bool:
@@ -173,6 +255,9 @@ class RelayService:
 
     def _polling_enabled(self) -> bool:
         return self.config.mode in {"polling", "hybrid"}
+
+    def _alerts_enabled(self) -> bool:
+        return self.config.alerts_enabled
 
     def _chat_allowed(self, chat_id: str) -> bool:
         if not self.config.allowed_chat_ids:

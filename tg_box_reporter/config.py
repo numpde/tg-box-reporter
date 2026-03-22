@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
+from typing import Pattern
+
+from .alerts import CollectorAlertsConfig, RouteErrorRateHighConfig, RouteSeenAfterQuietConfig
 
 
 class ConfigError(ValueError):
@@ -19,9 +23,19 @@ DEFAULT_COLLECTOR_DOCKER_TIMEOUT_SECONDS = 10.0
 DEFAULT_COLLECTOR_EVENT_MAX_RECENT = 200
 DEFAULT_COLLECTOR_EVENT_RETENTION_SECONDS = 3600
 DEFAULT_COLLECTOR_EVENT_MAX_BYTES = 16384
+DEFAULT_COLLECTOR_ALERT_MAX_RECENT = 200
+DEFAULT_COLLECTOR_ALERT_RETENTION_SECONDS = 86400
+DEFAULT_COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_WINDOW_SECONDS = 300
+DEFAULT_COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_MIN_REQUESTS = 10
+DEFAULT_COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_MIN_ERRORS = 5
+DEFAULT_COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_ERROR_RATE_GT = 0.5
+DEFAULT_COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_CLEAR_RATE_LT = 0.2
+DEFAULT_COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_PERIOD_SECONDS = 21600
 DEFAULT_RELAY_HEARTBEAT_PATH = "/tmp/tg-box-reporter-relay.heartbeat"
 DEFAULT_RELAY_HEALTH_STALE_SECONDS = 120
 DEFAULT_RELAY_HEALTH_SAFETY_MARGIN_SECONDS = 10
+DEFAULT_RELAY_ALERT_POLL_SECONDS = 15
+DEFAULT_RELAY_ALERT_BATCH_SIZE = 20
 
 
 def _optional(name: str, default: str = "") -> str:
@@ -83,6 +97,23 @@ def _csv(name: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
+def _csv_lower(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw = _optional(name)
+    if not raw:
+        return default
+    return tuple(part.strip().lower() for part in raw.split(",") if part.strip())
+
+
+def _regex(name: str) -> Pattern[str] | None:
+    raw = _optional(name)
+    if not raw:
+        return None
+    try:
+        return re.compile(raw)
+    except re.error as exc:
+        raise ConfigError(f"{name} must be a valid regular expression") from exc
+
+
 @dataclass(frozen=True)
 class CollectorConfig:
     bind_host: str
@@ -108,11 +139,77 @@ class CollectorConfig:
     event_max_recent: int = DEFAULT_COLLECTOR_EVENT_MAX_RECENT
     event_retention_seconds: int = DEFAULT_COLLECTOR_EVENT_RETENTION_SECONDS
     event_max_bytes: int = DEFAULT_COLLECTOR_EVENT_MAX_BYTES
+    alerts: CollectorAlertsConfig = CollectorAlertsConfig()
 
     @classmethod
     def from_env(cls) -> "CollectorConfig":
         host_root = _optional("COLLECTOR_HOST_ROOT", "/") or "/"
         disk_path = _optional("COLLECTOR_DISK_PATH", host_root) or host_root
+        route_error_status_classes = _csv_lower(
+            "COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_STATUS_CLASSES",
+            ("5xx",),
+        )
+        if not route_error_status_classes:
+            raise ConfigError("COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_STATUS_CLASSES must include at least one class")
+        valid_status_classes = {"2xx", "3xx", "4xx", "5xx"}
+        invalid_status_classes = [value for value in route_error_status_classes if value not in valid_status_classes]
+        if invalid_status_classes:
+            raise ConfigError(
+                "COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_STATUS_CLASSES must only include "
+                f"{', '.join(sorted(valid_status_classes))}"
+            )
+        route_error_rate_high = RouteErrorRateHighConfig(
+            enabled=_bool("COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_ENABLED", False),
+            allowlist_regex=_regex("COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_ALLOWLIST_REGEX"),
+            window_seconds=_int(
+                "COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_WINDOW_SECONDS",
+                DEFAULT_COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_WINDOW_SECONDS,
+                minimum=1,
+            ),
+            min_requests=_int(
+                "COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_MIN_REQUESTS",
+                DEFAULT_COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_MIN_REQUESTS,
+                minimum=1,
+            ),
+            min_errors=_int(
+                "COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_MIN_ERRORS",
+                DEFAULT_COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_MIN_ERRORS,
+                minimum=1,
+            ),
+            error_rate_gt=_float(
+                "COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_ERROR_RATE_GT",
+                DEFAULT_COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_ERROR_RATE_GT,
+                minimum=0.0,
+            ),
+            clear_rate_lt=_float(
+                "COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_CLEAR_RATE_LT",
+                DEFAULT_COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_CLEAR_RATE_LT,
+                minimum=0.0,
+            ),
+            status_classes=route_error_status_classes,
+        )
+        if route_error_rate_high.clear_rate_lt >= route_error_rate_high.error_rate_gt:
+            raise ConfigError(
+                "COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_CLEAR_RATE_LT must be < "
+                "COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_ERROR_RATE_GT"
+            )
+        if route_error_rate_high.min_errors > route_error_rate_high.min_requests:
+            raise ConfigError(
+                "COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_MIN_ERRORS must be <= "
+                "COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_MIN_REQUESTS"
+            )
+
+        route_seen_after_quiet = RouteSeenAfterQuietConfig(
+            enabled=_bool("COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_ENABLED", False),
+            allowlist_regex=_regex("COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_ALLOWLIST_REGEX"),
+            quiet_period_seconds=_int(
+                "COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_PERIOD_SECONDS",
+                DEFAULT_COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_PERIOD_SECONDS,
+                minimum=1,
+            ),
+            emit_on_first_seen=_bool("COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_EMIT_ON_FIRST_SEEN", False),
+        )
+
         return cls(
             bind_host=_optional("COLLECTOR_BIND_HOST", "127.0.0.1") or "127.0.0.1",
             port=_int("COLLECTOR_PORT", 9707, minimum=1),
@@ -181,6 +278,21 @@ class CollectorConfig:
                 DEFAULT_COLLECTOR_EVENT_MAX_BYTES,
                 minimum=128,
             ),
+            alerts=CollectorAlertsConfig(
+                enabled=_bool("COLLECTOR_ALERTS_ENABLED", False),
+                max_recent=_int(
+                    "COLLECTOR_ALERT_MAX_RECENT",
+                    DEFAULT_COLLECTOR_ALERT_MAX_RECENT,
+                    minimum=1,
+                ),
+                retention_seconds=_int(
+                    "COLLECTOR_ALERT_RETENTION_SECONDS",
+                    DEFAULT_COLLECTOR_ALERT_RETENTION_SECONDS,
+                    minimum=1,
+                ),
+                route_error_rate_high=route_error_rate_high,
+                route_seen_after_quiet=route_seen_after_quiet,
+            ),
         )
 
 
@@ -199,16 +311,20 @@ class RelayConfig:
     telegram_api_base: str
     heartbeat_path: str = DEFAULT_RELAY_HEARTBEAT_PATH
     health_stale_seconds: int = DEFAULT_RELAY_HEALTH_STALE_SECONDS
+    alerts_enabled: bool = False
+    alert_poll_seconds: int = DEFAULT_RELAY_ALERT_POLL_SECONDS
+    alert_batch_size: int = DEFAULT_RELAY_ALERT_BATCH_SIZE
 
     @classmethod
     def from_env(cls) -> "RelayConfig":
         mode = _optional("RELAY_MODE", "hybrid") or "hybrid"
         if mode not in {"scheduled", "polling", "hybrid"}:
             raise ConfigError("RELAY_MODE must be one of scheduled, polling, hybrid")
+        alerts_enabled = _bool("RELAY_ALERTS_ENABLED", False)
 
         chat_id = _optional("TG_CHAT_ID")
-        if mode in {"scheduled", "hybrid"} and not chat_id:
-            raise ConfigError("TG_CHAT_ID must be set when RELAY_MODE includes scheduled delivery")
+        if (mode in {"scheduled", "hybrid"} or alerts_enabled) and not chat_id:
+            raise ConfigError("TG_CHAT_ID must be set when RELAY_MODE includes scheduled delivery or alert delivery")
 
         allowed = _csv("TG_ALLOWED_CHAT_IDS")
         if not allowed and chat_id:
@@ -247,4 +363,7 @@ class RelayConfig:
             heartbeat_path=_optional("RELAY_HEARTBEAT_PATH", DEFAULT_RELAY_HEARTBEAT_PATH)
             or DEFAULT_RELAY_HEARTBEAT_PATH,
             health_stale_seconds=health_stale_seconds,
+            alerts_enabled=alerts_enabled,
+            alert_poll_seconds=_int("RELAY_ALERT_POLL_SECONDS", DEFAULT_RELAY_ALERT_POLL_SECONDS, minimum=1),
+            alert_batch_size=_int("RELAY_ALERT_BATCH_SIZE", DEFAULT_RELAY_ALERT_BATCH_SIZE, minimum=1),
         )

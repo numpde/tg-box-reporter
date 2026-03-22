@@ -59,6 +59,7 @@ Collector endpoints:
 - `/events`
 - `/events/recent`
 - `/events/summary`
+- `/alerts`
 
 ## Environment
 
@@ -89,6 +90,21 @@ Collector:
 - `COLLECTOR_EVENT_MAX_RECENT`
 - `COLLECTOR_EVENT_RETENTION_SECONDS`
 - `COLLECTOR_EVENT_MAX_BYTES`
+- `COLLECTOR_ALERTS_ENABLED`
+- `COLLECTOR_ALERT_MAX_RECENT`
+- `COLLECTOR_ALERT_RETENTION_SECONDS`
+- `COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_ENABLED`
+- `COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_ALLOWLIST_REGEX`
+- `COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_WINDOW_SECONDS`
+- `COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_MIN_REQUESTS`
+- `COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_MIN_ERRORS`
+- `COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_ERROR_RATE_GT`
+- `COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_CLEAR_RATE_LT`
+- `COLLECTOR_ALERT_ROUTE_ERROR_RATE_HIGH_STATUS_CLASSES`
+- `COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_ENABLED`
+- `COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_ALLOWLIST_REGEX`
+- `COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_PERIOD_SECONDS`
+- `COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_EMIT_ON_FIRST_SEEN`
 
 Relay:
 
@@ -105,6 +121,9 @@ Relay:
 - `REPORT_MAX_CONTAINERS`
 - `RELAY_HEARTBEAT_PATH`
 - `RELAY_HEALTH_STALE_SECONDS`
+- `RELAY_ALERTS_ENABLED`
+- `RELAY_ALERT_POLL_SECONDS`
+- `RELAY_ALERT_BATCH_SIZE`
 
 ## Commands
 
@@ -115,6 +134,7 @@ The relay supports:
 - `/containers`
 - `/problems`
 - `/events`
+- `/alerts`
 - `/help`
 
 ## Containerized Deployment Notes
@@ -143,12 +163,19 @@ Important: Docker socket access is still effectively host-level access. The spli
 - `/events`: combined recent event and event-summary view
 - `/events/recent`: recent ingested events
 - `/events/summary`: grouped event counts
+- `/alerts`: incremental alert feed with `after` and `limit` query parameters
 - `/readyz`: validates that the collector can currently produce a snapshot
 
 Threshold env vars are collector-side SSoT for problem detection. Set them to a negative value to disable that specific check.
 `COLLECTOR_DOCKER_TIMEOUT_SECONDS` bounds each Docker CLI call so the collector degrades cleanly instead of hanging forever.
 `POST /events` accepts authenticated JSON events when `COLLECTOR_EVENT_TOKEN` is set.
 `COLLECTOR_SHARED_NETWORK` and `COLLECTOR_SHARED_ALIAS` are only used by the optional shared-network compose override.
+Alert rules are collector-owned: the collector evaluates thresholds, dedupes transitions, and exposes the canonical `/alerts` feed. The relay only polls and delivers alert records.
+
+The built-in event-derived alert classes are:
+
+- `route_error_rate_high`: route-level rolling error-rate alert, `5xx` by default
+- `route_seen_after_quiet_period`: one-shot notice when a route is seen again after a configured quiet period
 
 ## Health Model
 
@@ -156,6 +183,7 @@ Threshold env vars are collector-side SSoT for problem detection. Set them to a 
 - `/readyz` forces a snapshot load and is the right endpoint for deployment healthchecks
 - the relay writes a heartbeat file and the compose healthcheck validates that the polling loop is still making progress
 - `RELAY_HEALTH_STALE_SECONDS` must stay above the configured long-poll/request timeout window or relay healthchecks will flap by design
+- automatic alerts baseline to the collector's current `latest_seq` on relay startup, so restarts do not replay retained historical alerts
 
 ## Deployment Artifacts
 

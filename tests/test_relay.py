@@ -32,13 +32,18 @@ class FakeCollectorClient:
         snapshot_payload: dict[str, object] | None = None,
         *,
         events_payload: dict[str, object] | None = None,
+        alerts_payload: dict[str, object] | None = None,
         snapshot_error: Exception | None = None,
         events_error: Exception | None = None,
+        alerts_error: Exception | None = None,
     ):
         self.snapshot_payload = snapshot_payload or {}
         self.events_payload = events_payload or {}
+        self.alerts_payload = alerts_payload or {}
         self.snapshot_error = snapshot_error
         self.events_error = events_error
+        self.alerts_error = alerts_error
+        self.alert_requests: list[tuple[int | None, int | None]] = []
 
     def fetch_snapshot(self) -> dict[str, object]:
         if self.snapshot_error is not None:
@@ -49,6 +54,14 @@ class FakeCollectorClient:
         if self.events_error is not None:
             raise self.events_error
         return self.events_payload
+
+    def fetch_alerts(self, *, after_seq: int | None = None, limit: int | None = None) -> dict[str, object]:
+        self.alert_requests.append((after_seq, limit))
+        if self.alerts_error is not None:
+            raise self.alerts_error
+        if callable(self.alerts_payload):
+            return self.alerts_payload(after_seq, limit)
+        return self.alerts_payload
 
 
 class FakeHeartbeat:
@@ -124,6 +137,33 @@ class RelayServiceTests(unittest.TestCase):
                     "method": "GET",
                     "status": 200,
                     "ts": "2026-03-21T00:00:00Z",
+                }
+            ],
+        }
+        self.alerts = {
+            "generated_at_utc": "2026-03-21T00:00:00Z",
+            "alerts_enabled": True,
+            "emitted_total": 1,
+            "retained_total": 1,
+            "retention_seconds": 86400,
+            "oldest_seq": 1,
+            "latest_seq": 1,
+            "after": None,
+            "truncated": False,
+            "alerts": [
+                {
+                    "seq": 1,
+                    "alert_class": "route_error_rate_high",
+                    "transition": "opened",
+                    "severity": "warning",
+                    "source": "vote-mcp",
+                    "env": "prod",
+                    "method": "GET",
+                    "route": "/polls",
+                    "name": "polls_hit",
+                    "summary": "prod GET /polls error rate 2/3 in 5m0s",
+                    "detail": "vote-mcp GET /polls saw 2 matching errors across 3 requests in the last 5m0s",
+                    "stats": {"total_requests": 3, "error_requests": 2},
                 }
             ],
         }
@@ -278,7 +318,7 @@ class RelayServiceTests(unittest.TestCase):
 
         self.assertEqual(
             telegram.messages,
-            [("123", "/report\n/summary\n/containers\n/problems\n/events\n/help")],
+            [("123", "/report\n/summary\n/containers\n/problems\n/events\n/alerts\n/help")],
         )
 
     def test_events_command_sends_event_summary(self) -> None:
@@ -295,6 +335,96 @@ class RelayServiceTests(unittest.TestCase):
         self.assertEqual(len(telegram.messages), 1)
         self.assertIn("events generated", telegram.messages[0][1])
         self.assertIn("polls_hit", telegram.messages[0][1])
+
+    def test_alerts_command_sends_alert_feed(self) -> None:
+        telegram = FakeTelegram()
+        service = RelayService(
+            self.config,
+            telegram=telegram,
+            collector_client=FakeCollectorClient(
+                self.snapshot,
+                events_payload=self.events,
+                alerts_payload=self.alerts,
+            ),
+            stderr=io.StringIO(),
+        )
+
+        service.handle_command("123", "/alerts")
+
+        self.assertEqual(len(telegram.messages), 1)
+        self.assertIn("alerts generated", telegram.messages[0][1])
+        self.assertIn("route_error_rate_high", telegram.messages[0][1])
+
+    def test_send_pending_alerts_advances_cursor_without_duplicates(self) -> None:
+        telegram = FakeTelegram()
+
+        def alerts_payload(after_seq: int | None, limit: int | None) -> dict[str, object]:
+            _ = limit
+            if after_seq in (None, 0):
+                return {**self.alerts, "after": after_seq, "alerts": list(self.alerts["alerts"])}
+            return {**self.alerts, "after": after_seq, "alerts": []}
+
+        service = RelayService(
+            RelayConfig(
+                bot_token="token",
+                collector_url="http://collector/snapshot",
+                mode="polling",
+                chat_id="123",
+                allowed_chat_ids=("123",),
+                interval_seconds=900,
+                startup_report=False,
+                request_timeout_seconds=20,
+                get_updates_timeout_seconds=30,
+                max_containers=5,
+                telegram_api_base="https://api.telegram.org",
+                alerts_enabled=True,
+                alert_batch_size=10,
+            ),
+            telegram=telegram,
+            collector_client=FakeCollectorClient(
+                self.snapshot,
+                events_payload=self.events,
+                alerts_payload=alerts_payload,
+            ),
+            stderr=io.StringIO(),
+        )
+
+        service.send_pending_alerts()
+        service.send_pending_alerts()
+
+        self.assertEqual(len(telegram.messages), 1)
+        self.assertEqual(service._last_alert_seq, 1)
+
+    def test_initialize_alert_cursor_baselines_to_latest_seq(self) -> None:
+        collector = FakeCollectorClient(
+            self.snapshot,
+            events_payload=self.events,
+            alerts_payload=self.alerts,
+        )
+        service = RelayService(
+            RelayConfig(
+                bot_token="token",
+                collector_url="http://collector/snapshot",
+                mode="polling",
+                chat_id="123",
+                allowed_chat_ids=("123",),
+                interval_seconds=900,
+                startup_report=False,
+                request_timeout_seconds=20,
+                get_updates_timeout_seconds=30,
+                max_containers=5,
+                telegram_api_base="https://api.telegram.org",
+                alerts_enabled=True,
+            ),
+            telegram=FakeTelegram(),
+            collector_client=collector,
+            stderr=io.StringIO(),
+        )
+
+        service.initialize_alert_cursor()
+
+        self.assertEqual(service._last_alert_seq, 1)
+        self.assertEqual(collector.alert_requests, [(None, 1)])
 
     def test_run_marks_heartbeat_before_entering_poll_loop(self) -> None:
         heartbeat = FakeHeartbeat()
@@ -422,12 +552,31 @@ class RelayConfigTests(unittest.TestCase):
 
         self.assertIn("RELAY_HEALTH_STALE_SECONDS must be >=", str(error.exception))
 
+    def test_from_env_requires_chat_id_for_alert_delivery(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "TG_BOT_TOKEN": "token",
+                "RELAY_MODE": "polling",
+                "RELAY_ALERTS_ENABLED": "1",
+            },
+            clear=True,
+        ):
+            with self.assertRaises(ConfigError) as error:
+                RelayConfig.from_env()
+
+        self.assertIn("TG_CHAT_ID must be set", str(error.exception))
+
 
 class CollectorClientTests(unittest.TestCase):
     def test_projection_url_preserves_path_prefix(self) -> None:
         client = CollectorClient(snapshot_url="http://collector:9707/reporter/snapshot", timeout_seconds=5)
 
         self.assertEqual(client._projection_url("/events"), "http://collector:9707/reporter/events")
+        self.assertEqual(
+            client._projection_url("/alerts", query={"after": "1", "limit": "10"}),
+            "http://collector:9707/reporter/alerts?after=1&limit=10",
+        )
 
 
 if __name__ == "__main__":

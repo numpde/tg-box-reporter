@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from tg_box_reporter.alerts import CollectorAlertsConfig, RouteErrorRateHighConfig
 from tg_box_reporter.events import EventStore, EventValidationError, normalize_event
 
 
@@ -85,6 +86,55 @@ class EventStoreTests(unittest.TestCase):
 
         self.assertEqual(payload["summary"][0]["count"], 2)
         self.assertEqual(payload["summary"][0]["route"], "/polls")
+
+    def test_event_store_exposes_alert_feed(self) -> None:
+        current = [0.0]
+
+        def clock() -> float:
+            return current[0]
+
+        def now_utc() -> str:
+            return f"2026-03-21T00:00:{int(current[0]):02d}Z"
+
+        store = EventStore(
+            max_recent=10,
+            retention_seconds=3600,
+            alerts_config=CollectorAlertsConfig(
+                enabled=True,
+                route_error_rate_high=RouteErrorRateHighConfig(
+                    enabled=True,
+                    window_seconds=60,
+                    min_requests=3,
+                    min_errors=2,
+                    error_rate_gt=0.6,
+                    clear_rate_lt=0.55,
+                ),
+            ),
+            clock=clock,
+            now_utc=now_utc,
+        )
+
+        base_event = {
+            "source": "vote-mcp",
+            "env": "demo",
+            "kind": "http.request",
+            "name": "poll_update",
+            "route": "/api/v1/polls/{poll_id}",
+            "method": "GET",
+        }
+        store.ingest({**base_event, "status": 503})
+        current[0] = 1.0
+        store.ingest({**base_event, "status": 503})
+        current[0] = 2.0
+        store.ingest({**base_event, "status": 200})
+
+        payload = store.alerts_snapshot()
+
+        self.assertEqual(payload["emitted_total"], 1)
+        self.assertEqual(payload["retained_total"], 1)
+        self.assertEqual(payload["latest_seq"], 1)
+        self.assertEqual(payload["alerts"][0]["alert_class"], "route_error_rate_high")
+        self.assertEqual(payload["alerts"][0]["transition"], "opened")
 
 
 if __name__ == "__main__":

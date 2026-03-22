@@ -306,6 +306,73 @@ def format_events(payload: dict[str, object]) -> str:
     return "\n".join(lines)
 
 
+def _line_for_alert(alert: dict[str, object]) -> str:
+    bits = [
+        f"seq={alert.get('seq', 0)}",
+        str(alert.get("severity") or "info"),
+        str(alert.get("transition") or "noticed"),
+        str(alert.get("alert_class") or "<class>"),
+        str(alert.get("env") or "<env>"),
+        str(alert.get("source") or "<source>"),
+        str(alert.get("method") or "<method>"),
+        str(alert.get("route") or "<route>"),
+        f"name={alert.get('name', '<name>')}",
+    ]
+    labels = dict(alert.get("labels") or {})
+    if labels:
+        label_text = ",".join(f"{key}={value}" for key, value in sorted(labels.items()))
+        bits.append(f"labels={label_text}")
+    bits.append(f"summary={alert.get('summary', '')}")
+    detail = str(alert.get("detail") or "").strip()
+    if detail:
+        bits.append(f"detail={detail}")
+    return "- " + " ".join(bits)
+
+
+def format_alert_record(alert: dict[str, object]) -> str:
+    lines = [
+        f"alert seq={int(alert.get('seq') or 0)}",
+        f"class {alert.get('alert_class', '<class>')} transition {alert.get('transition', 'noticed')} severity {alert.get('severity', 'info')}",
+        f"route {alert.get('env', '<env>')} {alert.get('source', '<source>')} {alert.get('method', '<method>')} {alert.get('route', '<route>')}",
+        f"summary {alert.get('summary', '')}",
+    ]
+    detail = str(alert.get("detail") or "").strip()
+    if detail:
+        lines.append(f"detail {detail}")
+    stats = dict(alert.get("stats") or {})
+    if stats:
+        stat_text = " ".join(f"{key}={value}" for key, value in sorted(stats.items()))
+        lines.append(f"stats {stat_text}")
+    return "\n".join(lines)
+
+
+def format_alerts(payload: dict[str, object]) -> str:
+    generated = str(payload.get("generated_at_utc") or "")
+    alerts = list(payload.get("alerts") or [])
+    lines = [
+        f"alerts generated {generated}",
+        f"alerts enabled {'yes' if payload.get('alerts_enabled') else 'no'}",
+        (
+            f"emitted total={int(payload.get('emitted_total') or 0)} "
+            f"retained={int(payload.get('retained_total') or 0)} "
+            f"retention={format_duration(payload.get('retention_seconds'))}"
+        ),
+        (
+            f"seq oldest={int(payload.get('oldest_seq') or 0)} "
+            f"latest={int(payload.get('latest_seq') or 0)} "
+            f"after={payload.get('after') if payload.get('after') is not None else '-'} "
+            f"truncated={'yes' if payload.get('truncated') else 'no'}"
+        ),
+    ]
+    if not alerts:
+        lines.append("alerts: no retained alerts")
+        return "\n".join(lines)
+    lines.append("alerts:")
+    for alert in alerts:
+        lines.append(_line_for_alert(alert))
+    return "\n".join(lines)
+
+
 def split_message(text: str, *, limit: int = 3900) -> list[str]:
     if len(text) <= limit:
         return [text]

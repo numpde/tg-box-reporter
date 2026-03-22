@@ -6,6 +6,8 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Callable
 
+from .alerts import AlertRuleEngine
+from .config import CollectorAlertsConfig
 from .projections import QueryParams, parse_limit
 
 MAX_EVENT_LABELS = 20
@@ -166,6 +168,7 @@ class EventStore:
         *,
         max_recent: int,
         retention_seconds: int,
+        alerts_config: CollectorAlertsConfig | None = None,
         clock: Callable[[], float] = time.time,
         now_utc: Callable[[], str] = _utc_now,
     ):
@@ -173,9 +176,14 @@ class EventStore:
         self.retention_seconds = retention_seconds
         self.clock = clock
         self.now_utc = now_utc
+        self.alerts_config = alerts_config or CollectorAlertsConfig()
         self._lock = threading.Lock()
         self._events: deque[tuple[float, dict[str, object]]] = deque()
         self._received_total = 0
+        self._alerts: deque[tuple[float, dict[str, object]]] = deque()
+        self._alert_emitted_total = 0
+        self._next_alert_seq = 1
+        self._alert_engine = AlertRuleEngine(self.alerts_config, now_utc=self.now_utc)
 
     def ingest(self, payload: dict[str, object]) -> dict[str, object]:
         event = normalize_event(payload, now_utc=self.now_utc)
@@ -184,6 +192,12 @@ class EventStore:
             self._prune_locked(now)
             self._events.append((now, event))
             self._received_total += 1
+            for alert in self._alert_engine.evaluate(event, now=now):
+                alert_record = dict(alert)
+                alert_record["seq"] = self._next_alert_seq
+                self._next_alert_seq += 1
+                self._alerts.append((now, alert_record))
+                self._alert_emitted_total += 1
             self._prune_locked(now)
         return dict(event)
 
@@ -200,6 +214,25 @@ class EventStore:
             "retention_seconds": self.retention_seconds,
             "recent": events,
             "summary": self._build_summary(events),
+        }
+
+    def alerts_snapshot(self) -> dict[str, object]:
+        now = self.clock()
+        with self._lock:
+            self._prune_locked(now)
+            alerts = [dict(alert) for _, alert in self._alerts]
+            emitted_total = self._alert_emitted_total
+        oldest_seq = int(alerts[0]["seq"]) if alerts else 0
+        latest_seq = int(alerts[-1]["seq"]) if alerts else 0
+        return {
+            "generated_at_utc": self.now_utc(),
+            "alerts_enabled": self.alerts_config.enabled,
+            "emitted_total": emitted_total,
+            "retained_total": len(alerts),
+            "retention_seconds": self.alerts_config.retention_seconds,
+            "oldest_seq": oldest_seq,
+            "latest_seq": latest_seq,
+            "alerts": alerts,
         }
 
     def _build_summary(self, events: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -221,11 +254,17 @@ class EventStore:
         )
 
     def _prune_locked(self, now: float) -> None:
-        cutoff = now - float(self.retention_seconds)
-        while self._events and self._events[0][0] < cutoff:
+        event_cutoff = now - float(self.retention_seconds)
+        while self._events and self._events[0][0] < event_cutoff:
             self._events.popleft()
         while len(self._events) > self.max_recent:
             self._events.popleft()
+        alert_cutoff = now - float(self.alerts_config.retention_seconds)
+        while self._alerts and self._alerts[0][0] < alert_cutoff:
+            self._alerts.popleft()
+        while len(self._alerts) > self.alerts_config.max_recent:
+            self._alerts.popleft()
+        self._alert_engine.prune(now=now)
 
 
 def _event_projection_base(payload: dict[str, object]) -> dict[str, object]:

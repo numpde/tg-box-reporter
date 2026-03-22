@@ -7,6 +7,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from .alerts import ALERT_PROJECTIONS
 from .config import CollectorConfig
 from .events import EVENT_PROJECTIONS, EventStore, EventValidationError
 from .projections import SNAPSHOT_PROJECTIONS
@@ -70,12 +71,18 @@ class CollectorHandler(BaseHTTPRequestHandler):
             return
 
         event_projection = EVENT_PROJECTIONS.get(path)
-        if event_projection is None:
+        if event_projection is not None:
+            payload = self.server.event_store.snapshot()
+            payload["ingest_enabled"] = bool(self.server.event_token)
+            self._send_json(HTTPStatus.OK, event_projection(payload, query))
+            return
+
+        alert_projection = ALERT_PROJECTIONS.get(path)
+        if alert_projection is None:
             self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
             return
-        payload = self.server.event_store.snapshot()
-        payload["ingest_enabled"] = bool(self.server.event_token)
-        self._send_json(HTTPStatus.OK, event_projection(payload, query))
+        payload = self.server.event_store.alerts_snapshot()
+        self._send_json(HTTPStatus.OK, alert_projection(payload, query))
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -151,6 +158,7 @@ def main() -> int:
     event_store = EventStore(
         max_recent=config.event_max_recent,
         retention_seconds=config.event_retention_seconds,
+        alerts_config=config.alerts,
     )
     server = CollectorHTTPServer(
         (config.bind_host, config.port),

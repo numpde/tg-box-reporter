@@ -6,6 +6,7 @@ import unittest
 from urllib import request
 from urllib.error import HTTPError
 
+from tg_box_reporter.alerts import CollectorAlertsConfig, RouteErrorRateHighConfig
 from tg_box_reporter.collector import CollectorHTTPServer, SnapshotCache
 from tg_box_reporter.events import EventStore
 
@@ -66,7 +67,21 @@ class CollectorHTTPTests(unittest.TestCase):
         self.server = CollectorHTTPServer(
             ("127.0.0.1", 0),
             self.cache,
-            event_store=EventStore(max_recent=50, retention_seconds=3600),
+            event_store=EventStore(
+                max_recent=50,
+                retention_seconds=3600,
+                alerts_config=CollectorAlertsConfig(
+                    enabled=True,
+                    route_error_rate_high=RouteErrorRateHighConfig(
+                        enabled=True,
+                        window_seconds=300,
+                        min_requests=3,
+                        min_errors=2,
+                        error_rate_gt=0.6,
+                        clear_rate_lt=0.55,
+                    ),
+                ),
+            ),
             event_token="secret-token",
             event_max_bytes=4096,
         )
@@ -169,6 +184,28 @@ class CollectorHTTPTests(unittest.TestCase):
         summary = self._get_json("/events/summary?groups=1")
         self.assertEqual(summary["groups"][0]["count"], 1)
         self.assertEqual(summary["groups"][0]["source"], "vote-mcp")
+
+    def test_alerts_projection_returns_incremental_feed(self) -> None:
+        base_event = {
+            "source": "vote-mcp",
+            "env": "prod",
+            "kind": "http.request",
+            "name": "polls_hit",
+            "route": "/polls",
+            "method": "GET",
+        }
+        self._post_json("/events", {**base_event, "status": 503})
+        self._post_json("/events", {**base_event, "status": 503})
+        self._post_json("/events", {**base_event, "status": 200})
+
+        payload = self._get_json("/alerts?after=0&limit=10")
+
+        self.assertEqual(payload["alerts_enabled"], True)
+        self.assertEqual(payload["emitted_total"], 1)
+        self.assertEqual(payload["latest_seq"], 1)
+        self.assertEqual(len(payload["alerts"]), 1)
+        self.assertEqual(payload["alerts"][0]["alert_class"], "route_error_rate_high")
+        self.assertEqual(payload["alerts"][0]["transition"], "opened")
 
     def test_events_post_requires_matching_bearer_token(self) -> None:
         req = request.Request(
