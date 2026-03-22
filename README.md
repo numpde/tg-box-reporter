@@ -82,6 +82,8 @@ Collector:
 - `COLLECTOR_ALERT_CONTAINER_CPU_PERCENT_GT`
 - `COLLECTOR_ALERT_CONTAINER_MEM_PERCENT_GT`
 - `COLLECTOR_DOCKER_TIMEOUT_SECONDS`
+- `COLLECTOR_SHARED_NETWORK`
+- `COLLECTOR_SHARED_ALIAS`
 
 Relay:
 
@@ -136,6 +138,7 @@ Important: Docker socket access is still effectively host-level access. The spli
 
 Threshold env vars are collector-side SSoT for problem detection. Set them to a negative value to disable that specific check.
 `COLLECTOR_DOCKER_TIMEOUT_SECONDS` bounds each Docker CLI call so the collector degrades cleanly instead of hanging forever.
+`COLLECTOR_SHARED_NETWORK` and `COLLECTOR_SHARED_ALIAS` are only used by the optional shared-network compose override.
 
 ## Health Model
 
@@ -150,6 +153,7 @@ This repo now includes generic deployment artifacts:
 
 - [Dockerfile](Dockerfile): one image for both collector and relay
 - [docker-compose.example.yml](docker-compose.example.yml): sample two-service stack
+- [docker-compose.shared-network.example.yml](docker-compose.shared-network.example.yml): optional collector-only attach to an external Docker network for cross-container event ingress
 - [collector.env.example](contrib/env/collector.env.example): split collector env file
 - [relay.env.example](contrib/env/relay.env.example): split relay env file
 - [tg-box-collector.service](contrib/systemd/tg-box-collector.service): host service unit
@@ -160,6 +164,21 @@ Container stack example:
 ```bash
 TG_BOT_TOKEN=... TG_CHAT_ID=... docker compose -f docker-compose.example.yml up -d --build
 ```
+
+If other containers need Docker-DNS reachability to the collector, keep that off the base stack and add the optional override instead:
+
+```bash
+docker network create tg-reporting
+COLLECTOR_SHARED_NETWORK=tg-reporting \
+COLLECTOR_SHARED_ALIAS=tg-box-collector \
+TG_BOT_TOKEN=... TG_CHAT_ID=... \
+docker compose \
+  -f docker-compose.example.yml \
+  -f docker-compose.shared-network.example.yml \
+  up -d --build
+```
+
+That leaves the relay on the private default network while giving emitting app containers a stable collector hostname such as `http://tg-box-collector:9707/events`.
 
 Host service example:
 

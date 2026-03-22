@@ -1,0 +1,12 @@
+services:
+  collector:
+    networks:
+      default:
+      shared_ingest:
+        aliases:
+          - "${COLLECTOR_SHARED_ALIAS:-tg-box-collector}"
+
+networks:
+  shared_ingest:
+    external: true
+    name: "${COLLECTOR_SHARED_NETWORK:?set COLLECTOR_SHARED_NETWORK}"
