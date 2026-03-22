@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tg_box_reporter.config import ConfigError, RelayConfig
-from tg_box_reporter.relay import RelayService
+from tg_box_reporter.relay import CollectorClient, RelayService
 from tg_box_reporter.relay_health import RelayHeartbeat, healthcheck_main
 from tg_box_reporter.telegram_api import TelegramClient
 
@@ -26,15 +26,29 @@ class FakeTelegram:
         return []
 
 
-class FakeSnapshotClient:
-    def __init__(self, payload: dict[str, object] | None = None, *, error: Exception | None = None):
-        self.payload = payload or {}
-        self.error = error
+class FakeCollectorClient:
+    def __init__(
+        self,
+        snapshot_payload: dict[str, object] | None = None,
+        *,
+        events_payload: dict[str, object] | None = None,
+        snapshot_error: Exception | None = None,
+        events_error: Exception | None = None,
+    ):
+        self.snapshot_payload = snapshot_payload or {}
+        self.events_payload = events_payload or {}
+        self.snapshot_error = snapshot_error
+        self.events_error = events_error
 
-    def fetch(self) -> dict[str, object]:
-        if self.error is not None:
-            raise self.error
-        return self.payload
+    def fetch_snapshot(self) -> dict[str, object]:
+        if self.snapshot_error is not None:
+            raise self.snapshot_error
+        return self.snapshot_payload
+
+    def fetch_events(self) -> dict[str, object]:
+        if self.events_error is not None:
+            raise self.events_error
+        return self.events_payload
 
 
 class FakeHeartbeat:
@@ -82,13 +96,44 @@ class RelayServiceTests(unittest.TestCase):
             "docker": {"available": True, "summary": {"total": 0, "running": 0, "restarting": 0, "unhealthy": 0, "exited": 0}, "containers": []},
             "errors": [],
         }
+        self.events = {
+            "generated_at_utc": "2026-03-21T00:00:00Z",
+            "ingest_enabled": True,
+            "received_total": 1,
+            "retained_total": 1,
+            "retention_seconds": 3600,
+            "summary": [
+                {
+                    "source": "vote-mcp",
+                    "env": "prod",
+                    "kind": "http.request",
+                    "name": "polls_hit",
+                    "route": "/polls",
+                    "method": "GET",
+                    "count": 1,
+                    "last_seen_utc": "2026-03-21T00:00:00Z",
+                }
+            ],
+            "recent": [
+                {
+                    "source": "vote-mcp",
+                    "env": "prod",
+                    "kind": "http.request",
+                    "name": "polls_hit",
+                    "route": "/polls",
+                    "method": "GET",
+                    "status": 200,
+                    "ts": "2026-03-21T00:00:00Z",
+                }
+            ],
+        }
 
     def test_report_command_sends_formatted_report(self) -> None:
         telegram = FakeTelegram()
         service = RelayService(
             self.config,
             telegram=telegram,
-            snapshot_client=FakeSnapshotClient(self.snapshot),
+            collector_client=FakeCollectorClient(self.snapshot, events_payload=self.events),
             stderr=io.StringIO(),
         )
 
@@ -103,7 +148,7 @@ class RelayServiceTests(unittest.TestCase):
         service = RelayService(
             self.config,
             telegram=telegram,
-            snapshot_client=FakeSnapshotClient(self.snapshot),
+            collector_client=FakeCollectorClient(self.snapshot, events_payload=self.events),
             stderr=io.StringIO(),
         )
 
@@ -116,7 +161,7 @@ class RelayServiceTests(unittest.TestCase):
         service = RelayService(
             self.config,
             telegram=telegram,
-            snapshot_client=FakeSnapshotClient(error=RuntimeError("collector down")),
+            collector_client=FakeCollectorClient(snapshot_error=RuntimeError("collector down")),
             stderr=io.StringIO(),
         )
 
@@ -153,7 +198,7 @@ class RelayServiceTests(unittest.TestCase):
         service = RelayService(
             config,
             telegram=telegram,
-            snapshot_client=FakeSnapshotClient(snapshot),
+            collector_client=FakeCollectorClient(snapshot, events_payload=self.events),
             stderr=io.StringIO(),
         )
 
@@ -181,7 +226,7 @@ class RelayServiceTests(unittest.TestCase):
         service = RelayService(
             self.config,
             telegram=telegram,
-            snapshot_client=FakeSnapshotClient(snapshot),
+            collector_client=FakeCollectorClient(snapshot, events_payload=self.events),
             stderr=io.StringIO(),
         )
 
@@ -210,7 +255,7 @@ class RelayServiceTests(unittest.TestCase):
         service = RelayService(
             self.config,
             telegram=telegram,
-            snapshot_client=FakeSnapshotClient(snapshot),
+            collector_client=FakeCollectorClient(snapshot, events_payload=self.events),
             stderr=io.StringIO(),
         )
 
@@ -225,7 +270,7 @@ class RelayServiceTests(unittest.TestCase):
         service = RelayService(
             self.config,
             telegram=telegram,
-            snapshot_client=FakeSnapshotClient(self.snapshot),
+            collector_client=FakeCollectorClient(self.snapshot, events_payload=self.events),
             stderr=io.StringIO(),
         )
 
@@ -233,15 +278,30 @@ class RelayServiceTests(unittest.TestCase):
 
         self.assertEqual(
             telegram.messages,
-            [("123", "/report\n/summary\n/containers\n/problems\n/help")],
+            [("123", "/report\n/summary\n/containers\n/problems\n/events\n/help")],
         )
+
+    def test_events_command_sends_event_summary(self) -> None:
+        telegram = FakeTelegram()
+        service = RelayService(
+            self.config,
+            telegram=telegram,
+            collector_client=FakeCollectorClient(self.snapshot, events_payload=self.events),
+            stderr=io.StringIO(),
+        )
+
+        service.handle_command("123", "/events")
+
+        self.assertEqual(len(telegram.messages), 1)
+        self.assertIn("events generated", telegram.messages[0][1])
+        self.assertIn("polls_hit", telegram.messages[0][1])
 
     def test_run_marks_heartbeat_before_entering_poll_loop(self) -> None:
         heartbeat = FakeHeartbeat()
         service = RelayService(
             self.config,
             telegram=InterruptingTelegram(),
-            snapshot_client=FakeSnapshotClient(self.snapshot),
+            collector_client=FakeCollectorClient(self.snapshot, events_payload=self.events),
             heartbeat=heartbeat,
             stderr=io.StringIO(),
         )
@@ -276,7 +336,7 @@ class RelayServiceTests(unittest.TestCase):
         service = RelayService(
             config,
             telegram=FakeTelegram(),
-            snapshot_client=FakeSnapshotClient(self.snapshot),
+            collector_client=FakeCollectorClient(self.snapshot, events_payload=self.events),
             heartbeat=heartbeat,
             sleep_fn=stop_after_first_sleep,
             stderr=io.StringIO(),
@@ -361,6 +421,13 @@ class RelayConfigTests(unittest.TestCase):
                 RelayConfig.from_env()
 
         self.assertIn("RELAY_HEALTH_STALE_SECONDS must be >=", str(error.exception))
+
+
+class CollectorClientTests(unittest.TestCase):
+    def test_projection_url_preserves_path_prefix(self) -> None:
+        client = CollectorClient(snapshot_url="http://collector:9707/reporter/snapshot", timeout_seconds=5)
+
+        self.assertEqual(client._projection_url("/events"), "http://collector:9707/reporter/events")
 
 
 if __name__ == "__main__":

@@ -8,8 +8,8 @@ QueryParams = dict[str, list[str]]
 ProjectionBuilder = Callable[[dict[str, object], QueryParams], dict[str, object]]
 
 
-def parse_limit(query: QueryParams, *, default: int = 50, maximum: int = 500) -> int:
-    raw = query.get("limit", [""])[0].strip()
+def parse_limit(query: QueryParams, *, key: str = "limit", default: int = 50, maximum: int = 500) -> int:
+    raw = query.get(key, [""])[0].strip()
     if not raw:
         return default
     try:

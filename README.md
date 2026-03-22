@@ -56,6 +56,9 @@ Collector endpoints:
 - `/summary`
 - `/containers`
 - `/problems`
+- `/events`
+- `/events/recent`
+- `/events/summary`
 
 ## Environment
 
@@ -82,8 +85,10 @@ Collector:
 - `COLLECTOR_ALERT_CONTAINER_CPU_PERCENT_GT`
 - `COLLECTOR_ALERT_CONTAINER_MEM_PERCENT_GT`
 - `COLLECTOR_DOCKER_TIMEOUT_SECONDS`
-- `COLLECTOR_SHARED_NETWORK`
-- `COLLECTOR_SHARED_ALIAS`
+- `COLLECTOR_EVENT_TOKEN`
+- `COLLECTOR_EVENT_MAX_RECENT`
+- `COLLECTOR_EVENT_RETENTION_SECONDS`
+- `COLLECTOR_EVENT_MAX_BYTES`
 
 Relay:
 
@@ -109,6 +114,7 @@ The relay supports:
 - `/summary`
 - `/containers`
 - `/problems`
+- `/events`
 - `/help`
 
 ## Containerized Deployment Notes
@@ -134,10 +140,14 @@ Important: Docker socket access is still effectively host-level access. The spli
 - `/summary`: compact host/docker summary plus overall status and problem counts
 - `/containers?limit=N`: sorted container list, hottest first
 - `/problems`: only detected problems and their counts
+- `/events`: combined recent event and event-summary view
+- `/events/recent`: recent ingested events
+- `/events/summary`: grouped event counts
 - `/readyz`: validates that the collector can currently produce a snapshot
 
 Threshold env vars are collector-side SSoT for problem detection. Set them to a negative value to disable that specific check.
 `COLLECTOR_DOCKER_TIMEOUT_SECONDS` bounds each Docker CLI call so the collector degrades cleanly instead of hanging forever.
+`POST /events` accepts authenticated JSON events when `COLLECTOR_EVENT_TOKEN` is set.
 `COLLECTOR_SHARED_NETWORK` and `COLLECTOR_SHARED_ALIAS` are only used by the optional shared-network compose override.
 
 ## Health Model
@@ -165,7 +175,7 @@ Container stack example:
 TG_BOT_TOKEN=... TG_CHAT_ID=... docker compose -f docker-compose.example.yml up -d --build
 ```
 
-If other containers need Docker-DNS reachability to the collector, keep that off the base stack and add the optional override instead:
+If other containers need Docker-DNS reachability to the collector for `POST /events`, keep that off the base stack and add the optional override instead:
 
 ```bash
 docker network create tg-reporting

@@ -7,6 +7,7 @@ from urllib import request
 from urllib.error import HTTPError
 
 from tg_box_reporter.collector import CollectorHTTPServer, SnapshotCache
+from tg_box_reporter.events import EventStore
 
 
 class FakeCollector:
@@ -62,7 +63,13 @@ class CollectorHTTPTests(unittest.TestCase):
         }
         self.collector = FakeCollector(self.snapshot)
         self.cache = SnapshotCache(self.collector, cache_seconds=5)
-        self.server = CollectorHTTPServer(("127.0.0.1", 0), self.cache)
+        self.server = CollectorHTTPServer(
+            ("127.0.0.1", 0),
+            self.cache,
+            event_store=EventStore(max_recent=50, retention_seconds=3600),
+            event_token="secret-token",
+            event_max_bytes=4096,
+        )
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.base_url = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -75,6 +82,19 @@ class CollectorHTTPTests(unittest.TestCase):
     def _get_json(self, path: str) -> dict[str, object]:
         with request.urlopen(f"{self.base_url}{path}", timeout=5) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    def _post_json(self, path: str, payload: dict[str, object], *, token: str = "secret-token") -> tuple[int, dict[str, object]]:
+        req = request.Request(
+            f"{self.base_url}{path}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+            method="POST",
+        )
+        with request.urlopen(req, timeout=5) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
 
     def test_summary_projection_is_compact_and_stable(self) -> None:
         payload = self._get_json("/summary")
@@ -104,7 +124,13 @@ class CollectorHTTPTests(unittest.TestCase):
 
     def test_readyz_returns_503_when_snapshot_generation_fails(self) -> None:
         cache = SnapshotCache(BrokenCollector(), cache_seconds=0)
-        server = CollectorHTTPServer(("127.0.0.1", 0), cache)
+        server = CollectorHTTPServer(
+            ("127.0.0.1", 0),
+            cache,
+            event_store=EventStore(max_recent=50, retention_seconds=3600),
+            event_token="secret-token",
+            event_max_bytes=4096,
+        )
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base_url = f"http://127.0.0.1:{server.server_address[1]}"
@@ -120,6 +146,60 @@ class CollectorHTTPTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_events_ingest_and_recent_projection(self) -> None:
+        status, payload = self._post_json(
+            "/events",
+            {
+                "source": "vote-mcp",
+                "env": "prod",
+                "kind": "http.request",
+                "name": "polls_hit",
+                "route": "/polls",
+                "method": "GET",
+                "status": 200,
+            },
+        )
+
+        self.assertEqual(status, 202)
+        self.assertEqual(payload["event"]["name"], "polls_hit")
+        recent = self._get_json("/events/recent?limit=1")
+        self.assertEqual(recent["retained_total"], 1)
+        self.assertEqual(recent["events"][0]["route"], "/polls")
+        summary = self._get_json("/events/summary?groups=1")
+        self.assertEqual(summary["groups"][0]["count"], 1)
+        self.assertEqual(summary["groups"][0]["source"], "vote-mcp")
+
+    def test_events_post_requires_matching_bearer_token(self) -> None:
+        req = request.Request(
+            f"{self.base_url}/events",
+            data=b'{"source":"vote-mcp","env":"prod","kind":"http.request","name":"polls_hit"}',
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        with self.assertRaises(HTTPError) as error:
+            request.urlopen(req, timeout=5)
+
+        self.assertEqual(error.exception.code, 401)
+
+    def test_events_post_rejects_invalid_payload(self) -> None:
+        req = request.Request(
+            f"{self.base_url}/events",
+            data=b'{"source":"vote-mcp"}',
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer secret-token",
+            },
+            method="POST",
+        )
+
+        with self.assertRaises(HTTPError) as error:
+            request.urlopen(req, timeout=5)
+
+        self.assertEqual(error.exception.code, 400)
+        payload = json.loads(error.exception.read().decode("utf-8"))
+        self.assertIn("env", payload["error"])
 
 
 if __name__ == "__main__":

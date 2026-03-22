@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import sys
 import time
 from urllib import request
+from urllib.parse import urlsplit, urlunsplit
 
 from .config import RelayConfig
-from .formatting import format_containers, format_problems, format_report, format_summary, split_message
+from .formatting import format_containers, format_events, format_problems, format_report, format_summary, split_message
 from .relay_health import RelayHeartbeat
 from .telegram_api import TelegramClient
 
@@ -15,18 +17,32 @@ COMMAND_REPORT_TYPES = {
     "/summary": "summary",
     "/containers": "containers",
     "/problems": "problems",
+    "/events": "events",
 }
 HELP_TEXT = "\n".join([*COMMAND_REPORT_TYPES, "/help"])
 
 
-class SnapshotClient:
-    def __init__(self, *, url: str, timeout_seconds: int):
-        self.url = url
+class CollectorClient:
+    def __init__(self, *, snapshot_url: str, timeout_seconds: int):
+        self.snapshot_url = snapshot_url
         self.timeout_seconds = timeout_seconds
 
-    def fetch(self) -> dict[str, object]:
-        with request.urlopen(self.url, timeout=self.timeout_seconds) as response:
+    def fetch_snapshot(self) -> dict[str, object]:
+        return self._fetch(self.snapshot_url)
+
+    def fetch_events(self) -> dict[str, object]:
+        return self._fetch(self._projection_url("/events"))
+
+    def _fetch(self, url: str) -> dict[str, object]:
+        with request.urlopen(url, timeout=self.timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    def _projection_url(self, path: str) -> str:
+        parsed = urlsplit(self.snapshot_url)
+        current_path = parsed.path or "/snapshot"
+        base_dir = posixpath.dirname(current_path.rstrip("/"))
+        normalized_path = posixpath.join(base_dir or "/", path.lstrip("/"))
+        return urlunsplit((parsed.scheme, parsed.netloc, normalized_path, "", ""))
 
 
 class RelayService:
@@ -35,7 +51,7 @@ class RelayService:
         config: RelayConfig,
         *,
         telegram: TelegramClient,
-        snapshot_client: SnapshotClient,
+        collector_client: CollectorClient,
         heartbeat: RelayHeartbeat | None = None,
         clock: callable = time.monotonic,
         sleep_fn: callable = time.sleep,
@@ -43,7 +59,7 @@ class RelayService:
     ):
         self.config = config
         self.telegram = telegram
-        self.snapshot_client = snapshot_client
+        self.collector_client = collector_client
         self.heartbeat = heartbeat or RelayHeartbeat(config.heartbeat_path)
         self.clock = clock
         self.sleep_fn = sleep_fn
@@ -131,20 +147,25 @@ class RelayService:
             self.stderr.flush()
 
     def send_report(self, chat_id: str, report_type: str) -> None:
-        snapshot = self.snapshot_client.fetch()
-        text = self._render_report(snapshot, report_type)
+        text = self._render_report(report_type)
         for chunk in split_message(text):
             self.telegram.send_message(chat_id=chat_id, text=chunk)
 
-    def _render_report(self, snapshot: dict[str, object], report_type: str) -> str:
+    def _render_report(self, report_type: str) -> str:
         if report_type == "report":
+            snapshot = self.collector_client.fetch_snapshot()
             return format_report(snapshot, max_containers=self.config.max_containers)
         if report_type == "summary":
+            snapshot = self.collector_client.fetch_snapshot()
             return format_summary(snapshot)
         if report_type == "containers":
+            snapshot = self.collector_client.fetch_snapshot()
             return format_containers(snapshot)
         if report_type == "problems":
+            snapshot = self.collector_client.fetch_snapshot()
             return format_problems(snapshot)
+        if report_type == "events":
+            return format_events(self.collector_client.fetch_events())
         raise ValueError(f"unknown report type: {report_type}")
 
     def _scheduled_enabled(self) -> bool:
@@ -175,8 +196,8 @@ def main() -> int:
             timeout_seconds=config.request_timeout_seconds,
             api_base=config.telegram_api_base,
         ),
-        snapshot_client=SnapshotClient(
-            url=config.collector_url,
+        collector_client=CollectorClient(
+            snapshot_url=config.collector_url,
             timeout_seconds=config.request_timeout_seconds,
         ),
     )

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from tg_box_reporter.formatting import format_problems, format_report, format_summary, split_message
+from tg_box_reporter.formatting import format_events, format_problems, format_report, format_summary, split_message
 
 
 class FormattingTests(unittest.TestCase):
@@ -94,6 +94,46 @@ class FormattingTests(unittest.TestCase):
         self.assertIn("status critical", rendered)
         self.assertIn("problems total=1 critical=1 warning=0 info=0", rendered)
         self.assertIn("- critical container:web container_unhealthy: container web is unhealthy", rendered)
+
+    def test_format_events_includes_summary_and_recent_items(self) -> None:
+        payload = {
+            "generated_at_utc": "2026-03-21T00:00:00Z",
+            "ingest_enabled": True,
+            "received_total": 3,
+            "retained_total": 2,
+            "retention_seconds": 3600,
+            "summary": [
+                {
+                    "source": "vote-mcp",
+                    "env": "prod",
+                    "kind": "http.request",
+                    "name": "polls_hit",
+                    "route": "/polls",
+                    "method": "GET",
+                    "count": 2,
+                    "last_seen_utc": "2026-03-21T00:00:00Z",
+                }
+            ],
+            "recent": [
+                {
+                    "source": "vote-mcp",
+                    "env": "prod",
+                    "kind": "http.request",
+                    "name": "polls_hit",
+                    "route": "/polls",
+                    "method": "GET",
+                    "status": 200,
+                    "ts": "2026-03-21T00:00:00Z",
+                }
+            ],
+        }
+
+        rendered = format_events(payload)
+
+        self.assertIn("events generated 2026-03-21T00:00:00Z", rendered)
+        self.assertIn("ingest enabled yes", rendered)
+        self.assertIn("polls_hit", rendered)
+        self.assertIn("route=/polls", rendered)
 
 
 if __name__ == "__main__":

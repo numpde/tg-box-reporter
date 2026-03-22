@@ -233,6 +233,79 @@ def format_problems(snapshot: dict[str, object]) -> str:
     return "\n".join(lines)
 
 
+def _line_for_event_group(group: dict[str, object]) -> str:
+    bits = [
+        str(group.get("env") or "<env>"),
+        str(group.get("source") or "<source>"),
+        str(group.get("kind") or "<kind>"),
+        str(group.get("name") or "<name>"),
+    ]
+    if group.get("route"):
+        bits.append(f"route={group['route']}")
+    if group.get("method"):
+        bits.append(f"method={group['method']}")
+    if group.get("status") is not None:
+        bits.append(f"status={group['status']}")
+    bits.append(f"count={group.get('count', 0)}")
+    bits.append(f"last={group.get('last_seen_utc', '')}")
+    return "- " + " ".join(bits)
+
+
+def _line_for_event(event: dict[str, object]) -> str:
+    bits = [
+        str(event.get("ts") or event.get("received_at_utc") or ""),
+        str(event.get("env") or "<env>"),
+        str(event.get("source") or "<source>"),
+        str(event.get("kind") or "<kind>"),
+        str(event.get("name") or "<name>"),
+    ]
+    if event.get("route"):
+        bits.append(f"route={event['route']}")
+    if event.get("method"):
+        bits.append(f"method={event['method']}")
+    if event.get("status") is not None:
+        bits.append(f"status={event['status']}")
+    if event.get("duration_ms") is not None:
+        bits.append(f"duration_ms={event['duration_ms']}")
+    if event.get("detail"):
+        bits.append(f"detail={event['detail']}")
+    labels = dict(event.get("labels") or {})
+    if labels:
+        label_text = ",".join(f"{key}={value}" for key, value in sorted(labels.items()))
+        bits.append(f"labels={label_text}")
+    return "- " + " ".join(bits)
+
+
+def format_events(payload: dict[str, object]) -> str:
+    generated = str(payload.get("generated_at_utc") or "")
+    summary = list(payload.get("summary") or [])
+    recent = list(payload.get("recent") or [])
+    lines = [
+        f"events generated {generated}",
+        f"ingest enabled {'yes' if payload.get('ingest_enabled') else 'no'}",
+        (
+            f"received total={int(payload.get('received_total') or 0)} "
+            f"retained={int(payload.get('retained_total') or 0)} "
+            f"retention={format_duration(payload.get('retention_seconds'))}"
+        ),
+    ]
+
+    if summary:
+        lines.append("summary:")
+        for group in summary:
+            lines.append(_line_for_event_group(group))
+    else:
+        lines.append("summary: no recent event groups")
+
+    if recent:
+        lines.append("recent:")
+        for event in recent:
+            lines.append(_line_for_event(event))
+    else:
+        lines.append("recent: no recent events")
+    return "\n".join(lines)
+
+
 def split_message(text: str, *, limit: int = 3900) -> list[str]:
     if len(text) <= limit:
         return [text]

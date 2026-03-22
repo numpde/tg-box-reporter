@@ -16,6 +16,9 @@ DEFAULT_COLLECTOR_ALERT_CONTAINER_RESTART_COUNT_GT = 5
 DEFAULT_COLLECTOR_ALERT_CONTAINER_CPU_PERCENT_GT = 85.0
 DEFAULT_COLLECTOR_ALERT_CONTAINER_MEM_PERCENT_GT = 85.0
 DEFAULT_COLLECTOR_DOCKER_TIMEOUT_SECONDS = 10.0
+DEFAULT_COLLECTOR_EVENT_MAX_RECENT = 200
+DEFAULT_COLLECTOR_EVENT_RETENTION_SECONDS = 3600
+DEFAULT_COLLECTOR_EVENT_MAX_BYTES = 16384
 DEFAULT_RELAY_HEARTBEAT_PATH = "/tmp/tg-box-reporter-relay.heartbeat"
 DEFAULT_RELAY_HEALTH_STALE_SECONDS = 120
 DEFAULT_RELAY_HEALTH_SAFETY_MARGIN_SECONDS = 10
@@ -101,6 +104,10 @@ class CollectorConfig:
     alert_container_cpu_percent_gt: float = DEFAULT_COLLECTOR_ALERT_CONTAINER_CPU_PERCENT_GT
     alert_container_mem_percent_gt: float = DEFAULT_COLLECTOR_ALERT_CONTAINER_MEM_PERCENT_GT
     docker_command_timeout_seconds: float = DEFAULT_COLLECTOR_DOCKER_TIMEOUT_SECONDS
+    event_token: str = ""
+    event_max_recent: int = DEFAULT_COLLECTOR_EVENT_MAX_RECENT
+    event_retention_seconds: int = DEFAULT_COLLECTOR_EVENT_RETENTION_SECONDS
+    event_max_bytes: int = DEFAULT_COLLECTOR_EVENT_MAX_BYTES
 
     @classmethod
     def from_env(cls) -> "CollectorConfig":
@@ -157,6 +164,22 @@ class CollectorConfig:
                 "COLLECTOR_DOCKER_TIMEOUT_SECONDS",
                 DEFAULT_COLLECTOR_DOCKER_TIMEOUT_SECONDS,
                 minimum=1.0,
+            ),
+            event_token=_optional("COLLECTOR_EVENT_TOKEN"),
+            event_max_recent=_int(
+                "COLLECTOR_EVENT_MAX_RECENT",
+                DEFAULT_COLLECTOR_EVENT_MAX_RECENT,
+                minimum=1,
+            ),
+            event_retention_seconds=_int(
+                "COLLECTOR_EVENT_RETENTION_SECONDS",
+                DEFAULT_COLLECTOR_EVENT_RETENTION_SECONDS,
+                minimum=1,
+            ),
+            event_max_bytes=_int(
+                "COLLECTOR_EVENT_MAX_BYTES",
+                DEFAULT_COLLECTOR_EVENT_MAX_BYTES,
+                minimum=128,
             ),
         )
 
