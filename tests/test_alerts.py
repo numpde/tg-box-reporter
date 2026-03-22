@@ -54,7 +54,45 @@ class AlertRuleEngineTests(unittest.TestCase):
         self.assertEqual(resolved[0]["stats"]["error_requests"], 2)
         self.assertEqual(resolved[0]["stats"]["total_requests"], 4)
 
-    def test_route_seen_after_quiet_does_not_fire_on_first_seen(self) -> None:
+    def test_route_seen_after_quiet_fires_on_first_seen_by_default(self) -> None:
+        engine = AlertRuleEngine(
+            CollectorAlertsConfig(
+                enabled=True,
+                route_seen_after_quiet=RouteSeenAfterQuietConfig(
+                    enabled=True,
+                    quiet_period_seconds=10,
+                ),
+            ),
+            now_utc=lambda: "2026-03-21T00:00:00Z",
+        )
+
+        event = {
+            "source": "vote-mcp",
+            "env": "prod",
+            "kind": "http.request",
+            "name": "poll_results",
+            "route": "/api/v1/polls/{poll_id}/results",
+            "method": "GET",
+            "ts": "2026-03-21T00:00:00Z",
+        }
+
+        noticed = engine.evaluate(event, now=0.0)
+        self.assertEqual(len(noticed), 1)
+        self.assertEqual(noticed[0]["alert_class"], "route_seen_after_quiet_period")
+        self.assertEqual(noticed[0]["transition"], "noticed")
+        self.assertEqual(noticed[0]["summary"], "prod GET /api/v1/polls/{poll_id}/results first seen since collector start")
+        self.assertTrue(noticed[0]["stats"]["startup_cold_start"])
+        self.assertIsNone(noticed[0]["stats"]["observed_quiet_seconds"])
+        self.assertEqual(engine.evaluate({**event, "ts": "2026-03-21T00:00:05Z"}, now=5.0), [])
+
+        resumed = engine.evaluate({**event, "ts": "2026-03-21T00:00:20Z"}, now=20.0)
+        self.assertEqual(len(resumed), 1)
+        self.assertEqual(resumed[0]["alert_class"], "route_seen_after_quiet_period")
+        self.assertEqual(resumed[0]["transition"], "noticed")
+        self.assertEqual(resumed[0]["stats"]["observed_quiet_seconds"], 15)
+        self.assertFalse(resumed[0]["stats"]["startup_cold_start"])
+
+    def test_route_seen_after_quiet_can_still_suppress_first_seen(self) -> None:
         engine = AlertRuleEngine(
             CollectorAlertsConfig(
                 enabled=True,
@@ -78,13 +116,6 @@ class AlertRuleEngineTests(unittest.TestCase):
         }
 
         self.assertEqual(engine.evaluate(event, now=0.0), [])
-        self.assertEqual(engine.evaluate({**event, "ts": "2026-03-21T00:00:05Z"}, now=5.0), [])
-
-        noticed = engine.evaluate({**event, "ts": "2026-03-21T00:00:20Z"}, now=20.0)
-        self.assertEqual(len(noticed), 1)
-        self.assertEqual(noticed[0]["alert_class"], "route_seen_after_quiet_period")
-        self.assertEqual(noticed[0]["transition"], "noticed")
-        self.assertEqual(noticed[0]["stats"]["observed_quiet_seconds"], 15)
 
 
 if __name__ == "__main__":

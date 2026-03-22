@@ -175,7 +175,7 @@ Alert rules are collector-owned: the collector evaluates thresholds, dedupes tra
 The built-in event-derived alert classes are:
 
 - `route_error_rate_high`: route-level rolling error-rate alert, `5xx` by default
-- `route_seen_after_quiet_period`: one-shot notice when a route is seen again after a configured quiet period
+- `route_seen_after_quiet_period`: one-shot notice when a route is first seen after collector start or seen again after a configured quiet period
 
 ## Health Model
 

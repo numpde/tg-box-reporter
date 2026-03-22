@@ -207,7 +207,7 @@ class CollectorConfig:
                 DEFAULT_COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_PERIOD_SECONDS,
                 minimum=1,
             ),
-            emit_on_first_seen=_bool("COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_EMIT_ON_FIRST_SEEN", False),
+            emit_on_first_seen=_bool("COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_EMIT_ON_FIRST_SEEN", True),
         )
 
         return cls(

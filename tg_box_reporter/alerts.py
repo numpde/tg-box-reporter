@@ -61,7 +61,7 @@ class RouteSeenAfterQuietConfig:
     enabled: bool = False
     allowlist_regex: Pattern[str] | None = None
     quiet_period_seconds: int = 21600
-    emit_on_first_seen: bool = False
+    emit_on_first_seen: bool = True
 
     def matches_route(self, route: str) -> bool:
         return self.allowlist_regex is None or bool(self.allowlist_regex.search(route))
@@ -260,6 +260,32 @@ class AlertRuleEngine:
             state.has_seen = True
             if first_seen and not rule.emit_on_first_seen:
                 return []
+            if first_seen:
+                return [
+                    self._build_alert_record(
+                        alert_class="route_seen_after_quiet_period",
+                        transition="noticed",
+                        severity="info",
+                        key=key,
+                        event=event,
+                        starts_at_utc=str(event.get("ts") or event.get("received_at_utc") or self.now_utc()),
+                        summary=(
+                            f"{key.env} {key.method} {key.route} "
+                            "first seen since collector start"
+                        ),
+                        detail=(
+                            f"{key.source} {key.method} {key.route} received its first matching "
+                            "event since the collector started"
+                        ),
+                        stats={
+                            "quiet_period_seconds": rule.quiet_period_seconds,
+                            "observed_quiet_seconds": None,
+                            "last_seen_before_utc": None,
+                            "seen_at_utc": str(event.get("ts") or event.get("received_at_utc") or self.now_utc()),
+                            "startup_cold_start": True,
+                        },
+                    )
+                ]
             quiet_seconds = rule.quiet_period_seconds
         else:
             state.has_seen = True
@@ -288,6 +314,7 @@ class AlertRuleEngine:
                     "observed_quiet_seconds": int(quiet_seconds),
                     "last_seen_before_utc": _utc_from_epoch(previous_seen_at) if previous_seen_at is not None else None,
                     "seen_at_utc": str(event.get("ts") or event.get("received_at_utc") or self.now_utc()),
+                    "startup_cold_start": False,
                 },
             )
         ]
