@@ -181,7 +181,7 @@ class RelayServiceTests(unittest.TestCase):
 
         self.assertEqual(len(telegram.messages), 1)
         self.assertEqual(telegram.messages[0][0], "123")
-        self.assertIn("host box-1", telegram.messages[0][1])
+        self.assertIn("System report for box-1", telegram.messages[0][1])
 
     def test_unauthorized_chat_gets_rejected(self) -> None:
         telegram = FakeTelegram()
@@ -273,9 +273,10 @@ class RelayServiceTests(unittest.TestCase):
         service.handle_command("123", "/summary")
 
         self.assertEqual(len(telegram.messages), 1)
-        self.assertIn("status warning", telegram.messages[0][1])
-        self.assertIn("problems total=1 critical=0 warning=1 info=0", telegram.messages[0][1])
-        self.assertNotIn("top containers:", telegram.messages[0][1])
+        self.assertIn("Overall status: warning", telegram.messages[0][1])
+        self.assertIn("Problem summary:", telegram.messages[0][1])
+        self.assertIn("- Warning: 1", telegram.messages[0][1])
+        self.assertNotIn("Top containers:", telegram.messages[0][1])
 
     def test_problems_command_sends_problem_list(self) -> None:
         telegram = FakeTelegram()
@@ -302,7 +303,7 @@ class RelayServiceTests(unittest.TestCase):
         service.handle_command("123", "/problems")
 
         self.assertEqual(len(telegram.messages), 1)
-        self.assertIn("status critical", telegram.messages[0][1])
+        self.assertIn("Overall status: critical", telegram.messages[0][1])
         self.assertIn("container_unhealthy", telegram.messages[0][1])
 
     def test_help_lists_all_commands(self) -> None:
@@ -333,7 +334,7 @@ class RelayServiceTests(unittest.TestCase):
         service.handle_command("123", "/events")
 
         self.assertEqual(len(telegram.messages), 1)
-        self.assertIn("events generated", telegram.messages[0][1])
+        self.assertIn("Recent application events", telegram.messages[0][1])
         self.assertIn("polls_hit", telegram.messages[0][1])
 
     def test_alerts_command_sends_alert_feed(self) -> None:
@@ -352,8 +353,8 @@ class RelayServiceTests(unittest.TestCase):
         service.handle_command("123", "/alerts")
 
         self.assertEqual(len(telegram.messages), 1)
-        self.assertIn("alerts generated", telegram.messages[0][1])
-        self.assertIn("route_error_rate_high", telegram.messages[0][1])
+        self.assertIn("Alert feed", telegram.messages[0][1])
+        self.assertIn("Alert: Elevated server error rate on Prod", telegram.messages[0][1])
 
     def test_send_pending_alerts_advances_cursor_without_duplicates(self) -> None:
         telegram = FakeTelegram()

@@ -41,9 +41,11 @@ class FormattingTests(unittest.TestCase):
 
         rendered = format_report(snapshot, max_containers=5)
 
-        self.assertIn("host box-1 snapshot 2026-03-21T00:00:00Z", rendered)
-        self.assertIn("containers total=2 running=1", rendered)
-        self.assertIn("- web cpu=10.0% mem=20.0% restarts=0 state=running/healthy", rendered)
+        self.assertIn("System report for box-1", rendered)
+        self.assertIn("Generated at: 2026-03-21T00:00:00Z", rendered)
+        self.assertIn("Container health:", rendered)
+        self.assertIn("- Total containers: 2", rendered)
+        self.assertIn("- web is running and healthy. CPU usage is 10.0%, memory usage is 20.0%, and restart count is 0.", rendered)
 
     def test_split_message_breaks_large_payload_on_line_boundaries(self) -> None:
         text = "\n".join(f"line-{index}" for index in range(50))
@@ -76,10 +78,12 @@ class FormattingTests(unittest.TestCase):
 
         rendered = format_summary(snapshot)
 
-        self.assertIn("summary generated 2026-03-21T00:00:00Z", rendered)
-        self.assertIn("status warning", rendered)
-        self.assertIn("problems total=2 critical=0 warning=2 info=0", rendered)
-        self.assertIn("containers total=2 running=1", rendered)
+        self.assertIn("System summary for box-1", rendered)
+        self.assertIn("Overall status: warning", rendered)
+        self.assertIn("Problem summary:", rendered)
+        self.assertIn("- Warning: 2", rendered)
+        self.assertIn("Container health:", rendered)
+        self.assertIn("- Total containers: 2", rendered)
 
     def test_format_problems_includes_problem_details(self) -> None:
         snapshot = {
@@ -98,10 +102,12 @@ class FormattingTests(unittest.TestCase):
 
         rendered = format_problems(snapshot)
 
-        self.assertIn("problems generated 2026-03-21T00:00:00Z", rendered)
-        self.assertIn("status critical", rendered)
-        self.assertIn("problems total=1 critical=1 warning=0 info=0", rendered)
-        self.assertIn("- critical container:web container_unhealthy: container web is unhealthy", rendered)
+        self.assertIn("Problems report", rendered)
+        self.assertIn("Overall status: critical", rendered)
+        self.assertIn("Problem 1:", rendered)
+        self.assertIn("Severity: critical", rendered)
+        self.assertIn("Code: container_unhealthy", rendered)
+        self.assertIn("Detail: container web is unhealthy", rendered)
 
     def test_format_events_includes_summary_and_recent_items(self) -> None:
         payload = {
@@ -138,10 +144,10 @@ class FormattingTests(unittest.TestCase):
 
         rendered = format_events(payload)
 
-        self.assertIn("events generated 2026-03-21T00:00:00Z", rendered)
-        self.assertIn("ingest enabled yes", rendered)
-        self.assertIn("polls_hit", rendered)
-        self.assertIn("route=/polls", rendered)
+        self.assertIn("Recent application events", rendered)
+        self.assertIn("Event ingestion enabled: yes", rendered)
+        self.assertIn("In Prod, vote-mcp handled GET /polls for event polls_hit", rendered)
+        self.assertIn("At 2026-03-21T00:00:00Z, Prod vote-mcp handled GET /polls", rendered)
 
     def test_format_alerts_includes_feed_metadata_and_items(self) -> None:
         payload = {
@@ -174,10 +180,11 @@ class FormattingTests(unittest.TestCase):
 
         rendered = format_alerts(payload)
 
-        self.assertIn("alerts enabled yes", rendered)
-        self.assertIn("seq oldest=2 latest=2 after=1 truncated=no", rendered)
-        self.assertIn("route_error_rate_high", rendered)
-        self.assertIn("summary=prod GET /polls error rate 2/3 in 5m0s", rendered)
+        self.assertIn("Alert feed", rendered)
+        self.assertIn("Alerts enabled: yes", rendered)
+        self.assertIn("Requested after sequence: 1", rendered)
+        self.assertIn("Alert: Elevated server error rate on Prod", rendered)
+        self.assertIn("prod GET /polls error rate 2/3 in 5m0s", rendered)
 
     def test_format_alert_record_renders_summary_and_stats(self) -> None:
         rendered = format_alert_record(
@@ -196,9 +203,11 @@ class FormattingTests(unittest.TestCase):
             }
         )
 
-        self.assertIn("alert seq=3", rendered)
-        self.assertIn("route_seen_after_quiet_period", rendered)
-        self.assertIn("observed_quiet_seconds=21600", rendered)
+        self.assertIn("Alert: Demo route seen after quiet period", rendered)
+        self.assertIn("Route: GET /polls", rendered)
+        self.assertIn("Alert metadata:", rendered)
+        self.assertIn("Alert stats:", rendered)
+        self.assertIn("- Observed quiet period: 6h0m0s", rendered)
 
 
 if __name__ == "__main__":

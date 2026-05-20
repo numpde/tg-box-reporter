@@ -44,94 +44,143 @@ def format_duration(seconds: float | int | None) -> str:
     return "".join(parts)
 
 
-def _line_for_container(container: dict[str, object]) -> str:
+def _yes_no(value: object) -> str:
+    return "yes" if bool(value) else "no"
+
+
+def _display_env(value: object) -> str:
+    text = str(value or "<env>")
+    return text.capitalize() if text.islower() else text
+
+
+def _describe_route_method(*, route: object, method: object) -> str:
+    route_text = str(route or "").strip()
+    method_text = str(method or "").strip()
+    if method_text and route_text:
+        return f"{method_text} {route_text}"
+    if route_text:
+        return route_text
+    if method_text:
+        return method_text
+    return "<unknown route>"
+
+
+def _section_lines(title: str, items: list[tuple[str, object]]) -> list[str]:
+    lines = [f"{title}:"]
+    for label, value in items:
+        lines.append(f"- {label}: {value}")
+    return lines
+
+
+def _problem_summary_items(problem_summary: dict[str, object]) -> list[tuple[str, object]]:
+    return [
+        ("Total detected", int(problem_summary.get("total") or 0)),
+        ("Critical", int(problem_summary.get("critical") or 0)),
+        ("Warning", int(problem_summary.get("warning") or 0)),
+        ("Info", int(problem_summary.get("info") or 0)),
+    ]
+
+
+def _host_health_items(host: dict[str, object]) -> list[tuple[str, object]]:
+    memory = dict(host.get("memory") or {})
+    swap = dict(host.get("swap") or {})
+    disk = dict(host.get("disk") or {})
+    return [
+        ("Hostname", host.get("hostname", "<unknown>")),
+        ("Uptime", format_duration(host.get("uptime_seconds"))),
+        (
+            "Load average",
+            f"{host.get('load_1m', 0.0):.2f} / {host.get('load_5m', 0.0):.2f} / {host.get('load_15m', 0.0):.2f}",
+        ),
+        ("CPU count", host.get("cpu_count", 0)),
+        (
+            "Memory usage",
+            f"{format_bytes(int(memory.get('used_bytes') or 0))} of "
+            f"{format_bytes(int(memory.get('total_bytes') or 0))} "
+            f"({format_percent(memory.get('used_percent'))})",
+        ),
+        (
+            "Swap usage",
+            f"{format_bytes(int(swap.get('used_bytes') or 0))} of "
+            f"{format_bytes(int(swap.get('total_bytes') or 0))} "
+            f"({format_percent(swap.get('used_percent'))})",
+        ),
+        (
+            "Disk usage",
+            f"{format_bytes(int(disk.get('used_bytes') or 0))} of "
+            f"{format_bytes(int(disk.get('total_bytes') or 0))} "
+            f"({format_percent(disk.get('used_percent'))}) on {disk.get('path', '<unknown>')}",
+        ),
+    ]
+
+
+def _container_health_items(docker: dict[str, object]) -> list[tuple[str, object]]:
+    summary = dict(docker.get("summary") or {})
+    if not docker.get("available", False):
+        return [
+            ("Docker available", "no"),
+            ("Collector detail", docker.get("error", "no data")),
+        ]
+    return [
+        ("Docker available", "yes"),
+        ("Total containers", summary.get("total", 0)),
+        ("Running", summary.get("running", 0)),
+        ("Restarting", summary.get("restarting", 0)),
+        ("Unhealthy", summary.get("unhealthy", 0)),
+        ("Exited", summary.get("exited", 0)),
+    ]
+
+
+def _container_sentence(container: dict[str, object]) -> str:
     status = str(container.get("status") or "unknown")
     health = str(container.get("health") or "")
-    status_bits = [status]
-    if health:
-        status_bits.append(health)
+    state_text = f"{status} and {health}" if health else status
     return (
-        f"- {container.get('name', '<unknown>')} "
-        f"cpu={format_percent(container.get('cpu_percent'))} "
-        f"mem={format_percent(container.get('mem_percent'))} "
-        f"restarts={container.get('restart_count', 0)} "
-        f"state={'/'.join(status_bits)}"
+        f"- {container.get('name', '<unknown>')} is {state_text}. "
+        f"CPU usage is {format_percent(container.get('cpu_percent'))}, "
+        f"memory usage is {format_percent(container.get('mem_percent'))}, "
+        f"and restart count is {container.get('restart_count', 0)}."
     )
 
 
-def _problem_summary_line(problem_summary: dict[str, object]) -> str:
-    return (
-        "problems "
-        f"total={int(problem_summary.get('total') or 0)} "
-        f"critical={int(problem_summary.get('critical') or 0)} "
-        f"warning={int(problem_summary.get('warning') or 0)} "
-        f"info={int(problem_summary.get('info') or 0)}"
-    )
+def _collector_error_lines(errors: list[object]) -> list[str]:
+    if not errors:
+        return []
+    lines = ["Collector errors:"]
+    for error in errors:
+        source = error.get("source", "collector")
+        detail = error.get("detail", "<no detail>")
+        lines.append(f"- {source}: {detail}")
+    return lines
 
 
 def format_report(snapshot: dict[str, object], *, max_containers: int = 10) -> str:
     generated = str(snapshot.get("generated_at_utc") or "")
     host = dict(snapshot.get("host") or {})
     docker = dict(snapshot.get("docker") or {})
-    memory = dict(host.get("memory") or {})
-    swap = dict(host.get("swap") or {})
-    disk = dict(host.get("disk") or {})
-    summary = dict(docker.get("summary") or {})
     containers = list(docker.get("containers") or [])
     errors = list(snapshot.get("errors") or [])
 
     lines = [
-        f"host {host.get('hostname', '<unknown>')} snapshot {generated}",
-        (
-            f"uptime {format_duration(host.get('uptime_seconds'))}  "
-            f"load {host.get('load_1m', 0.0):.2f}/{host.get('load_5m', 0.0):.2f}/{host.get('load_15m', 0.0):.2f}  "
-            f"cpus {host.get('cpu_count', 0)}"
-        ),
-        (
-            f"mem {format_bytes(int(memory.get('used_bytes') or 0))}/"
-            f"{format_bytes(int(memory.get('total_bytes') or 0))} "
-            f"({format_percent(memory.get('used_percent'))})"
-        ),
-        (
-            f"swap {format_bytes(int(swap.get('used_bytes') or 0))}/"
-            f"{format_bytes(int(swap.get('total_bytes') or 0))} "
-            f"({format_percent(swap.get('used_percent'))})"
-        ),
-        (
-            f"disk {format_bytes(int(disk.get('used_bytes') or 0))}/"
-            f"{format_bytes(int(disk.get('total_bytes') or 0))} "
-            f"({format_percent(disk.get('used_percent'))}) path={disk.get('path', '<unknown>')}"
-        ),
+        f"System report for {host.get('hostname', '<unknown>')}",
+        f"Generated at: {generated}",
     ]
-
-    if docker.get("available", False):
-        lines.append(
-            "containers "
-            f"total={summary.get('total', 0)} "
-            f"running={summary.get('running', 0)} "
-            f"restarting={summary.get('restarting', 0)} "
-            f"unhealthy={summary.get('unhealthy', 0)} "
-            f"exited={summary.get('exited', 0)}"
-        )
-        if containers:
-            lines.append("")
-            lines.append("top containers:")
-            for container in sort_containers(containers)[:max_containers]:
-                lines.append(_line_for_container(container))
-            remaining = max(0, len(containers) - max_containers)
-            if remaining:
-                lines.append(f"... {remaining} more containers")
-    else:
-        lines.append(f"docker unavailable: {docker.get('error', 'no data')}")
-
-    if errors:
+    lines.append("")
+    lines.extend(_section_lines("Host health", _host_health_items(host)))
+    lines.append("")
+    lines.extend(_section_lines("Container health", _container_health_items(docker)))
+    if containers:
         lines.append("")
-        lines.append("collector errors:")
-        for error in errors:
-            source = error.get("source", "collector")
-            detail = error.get("detail", "<no detail>")
-            lines.append(f"- {source}: {detail}")
-
+        lines.append("Top containers:")
+        for container in sort_containers(containers)[:max_containers]:
+            lines.append(_container_sentence(container))
+        remaining = max(0, len(containers) - max_containers)
+        if remaining:
+            lines.append(f"- {remaining} more containers are available in the full container list.")
+    collector_error_lines = _collector_error_lines(errors)
+    if collector_error_lines:
+        lines.append("")
+        lines.extend(collector_error_lines)
     return "\n".join(lines)
 
 
@@ -142,14 +191,18 @@ def format_containers(snapshot: dict[str, object], *, max_containers: int | None
     projection = project_containers(snapshot, {"limit": [str(limit)]})
     containers = list(projection.get("containers") or [])
     lines = [
-        f"container list generated {snapshot.get('generated_at_utc', '')}",
-        f"total containers {projection.get('total', len(containers))}",
+        "Container status report",
+        f"Generated at: {snapshot.get('generated_at_utc', '')}",
+        f"Total containers visible: {projection.get('total', len(containers))}",
     ]
+    if containers:
+        lines.append("")
+        lines.append("Visible container details:")
     for container in containers:
-        lines.append(_line_for_container(container))
+        lines.append(_container_sentence(container))
     remaining = max(0, int(projection.get("total", len(containers))) - len(containers))
     if remaining:
-        lines.append(f"... {remaining} more containers")
+        lines.append(f"- {remaining} more containers are available in the full container list.")
     return "\n".join(lines)
 
 
@@ -159,51 +212,19 @@ def format_summary(snapshot: dict[str, object]) -> str:
     status = str(projection.get("status") or "unknown")
     host = dict(projection.get("host") or {})
     docker = dict(projection.get("docker") or {})
-    memory = dict(host.get("memory") or {})
-    swap = dict(host.get("swap") or {})
-    disk = dict(host.get("disk") or {})
-    summary = dict(docker.get("summary") or {})
     problem_summary = dict(projection.get("problem_summary") or {})
 
     lines = [
-        f"summary generated {generated}",
-        f"status {status}",
-        _problem_summary_line(problem_summary),
-        (
-            f"host {host.get('hostname', '<unknown>')}  "
-            f"uptime {format_duration(host.get('uptime_seconds'))}  "
-            f"load {host.get('load_1m', 0.0):.2f}/{host.get('load_5m', 0.0):.2f}/{host.get('load_15m', 0.0):.2f}  "
-            f"cpus {host.get('cpu_count', 0)}"
-        ),
-        (
-            f"mem {format_bytes(int(memory.get('used_bytes') or 0))}/"
-            f"{format_bytes(int(memory.get('total_bytes') or 0))} "
-            f"({format_percent(memory.get('used_percent'))})"
-        ),
-        (
-            f"swap {format_bytes(int(swap.get('used_bytes') or 0))}/"
-            f"{format_bytes(int(swap.get('total_bytes') or 0))} "
-            f"({format_percent(swap.get('used_percent'))})"
-        ),
-        (
-            f"disk {format_bytes(int(disk.get('used_bytes') or 0))}/"
-            f"{format_bytes(int(disk.get('total_bytes') or 0))} "
-            f"({format_percent(disk.get('used_percent'))}) path={disk.get('path', '<unknown>')}"
-        ),
+        f"System summary for {host.get('hostname', '<unknown>')}",
+        f"Generated at: {generated}",
+        f"Overall status: {status}",
     ]
-
-    if docker.get("available", False):
-        lines.append(
-            "containers "
-            f"total={summary.get('total', 0)} "
-            f"running={summary.get('running', 0)} "
-            f"restarting={summary.get('restarting', 0)} "
-            f"unhealthy={summary.get('unhealthy', 0)} "
-            f"exited={summary.get('exited', 0)}"
-        )
-    else:
-        lines.append("docker unavailable")
-
+    lines.append("")
+    lines.extend(_section_lines("Problem summary", _problem_summary_items(problem_summary)))
+    lines.append("")
+    lines.extend(_section_lines("Host health", _host_health_items(host)))
+    lines.append("")
+    lines.extend(_section_lines("Container health", _container_health_items(docker)))
     return "\n".join(lines)
 
 
@@ -215,65 +236,75 @@ def format_problems(snapshot: dict[str, object]) -> str:
     problems = list(projection.get("problems") or [])
 
     lines = [
-        f"problems generated {generated}",
-        f"status {status}",
-        _problem_summary_line(problem_summary),
+        "Problems report",
+        f"Generated at: {generated}",
+        f"Overall status: {status}",
     ]
+    lines.append("")
+    lines.extend(_section_lines("Problem summary", _problem_summary_items(problem_summary)))
 
     if not problems:
-        lines.append("no problems detected")
+        lines.append("")
+        lines.append("Detected problems:")
+        lines.append("- No problems detected.")
         return "\n".join(lines)
 
-    for problem in problems:
+    lines.append("")
+    lines.append("Detected problems:")
+    for index, problem in enumerate(problems, start=1):
         severity = str(problem.get("severity") or "info")
         source = str(problem.get("source") or "collector")
         code = str(problem.get("code") or "unknown")
         detail = str(problem.get("detail") or "<no detail>")
-        lines.append(f"- {severity} {source} {code}: {detail}")
+        lines.append(f"Problem {index}:")
+        lines.append(f"Severity: {severity}")
+        lines.append(f"Source: {source}")
+        lines.append(f"Code: {code}")
+        lines.append(f"Detail: {detail}")
+        if index != len(problems):
+            lines.append("")
     return "\n".join(lines)
 
 
 def _line_for_event_group(group: dict[str, object]) -> str:
-    bits = [
-        str(group.get("env") or "<env>"),
-        str(group.get("source") or "<source>"),
-        str(group.get("kind") or "<kind>"),
-        str(group.get("name") or "<name>"),
-    ]
-    if group.get("route"):
-        bits.append(f"route={group['route']}")
-    if group.get("method"):
-        bits.append(f"method={group['method']}")
-    if group.get("status") is not None:
-        bits.append(f"status={group['status']}")
-    bits.append(f"count={group.get('count', 0)}")
-    bits.append(f"last={group.get('last_seen_utc', '')}")
-    return "- " + " ".join(bits)
+    env = _display_env(group.get("env"))
+    source = str(group.get("source") or "<source>")
+    kind = str(group.get("kind") or "<kind>")
+    name = str(group.get("name") or "<name>")
+    route_method = _describe_route_method(route=group.get("route"), method=group.get("method"))
+    status_text = f" with status {group['status']}" if group.get("status") is not None else ""
+    return (
+        f"- In {env}, {source} handled {route_method} for event {name} ({kind})"
+        f"{status_text} {group.get('count', 0)} time(s). "
+        f"The most recent matching event was at {group.get('last_seen_utc', '')}."
+    )
 
 
 def _line_for_event(event: dict[str, object]) -> str:
+    route_method = _describe_route_method(route=event.get("route"), method=event.get("method"))
     bits = [
-        str(event.get("ts") or event.get("received_at_utc") or ""),
-        str(event.get("env") or "<env>"),
+        f"- At {event.get('ts') or event.get('received_at_utc') or ''},",
+        f"{_display_env(event.get('env'))}",
         str(event.get("source") or "<source>"),
-        str(event.get("kind") or "<kind>"),
+        "handled",
+        route_method,
+        "for event",
         str(event.get("name") or "<name>"),
+        f"({event.get('kind') or '<kind>'})",
     ]
-    if event.get("route"):
-        bits.append(f"route={event['route']}")
-    if event.get("method"):
-        bits.append(f"method={event['method']}")
     if event.get("status") is not None:
-        bits.append(f"status={event['status']}")
+        bits.append(f"with status {event['status']}")
     if event.get("duration_ms") is not None:
-        bits.append(f"duration_ms={event['duration_ms']}")
+        bits.append(f"and duration {event['duration_ms']} ms")
+    sentence = " ".join(bits).strip() + "."
+    extra_lines: list[str] = [sentence]
     if event.get("detail"):
-        bits.append(f"detail={event['detail']}")
+        extra_lines.append(f"  Detail: {event['detail']}")
     labels = dict(event.get("labels") or {})
     if labels:
         label_text = ",".join(f"{key}={value}" for key, value in sorted(labels.items()))
-        bits.append(f"labels={label_text}")
-    return "- " + " ".join(bits)
+        extra_lines.append(f"  Labels: {label_text}")
+    return "\n".join(extra_lines)
 
 
 def format_events(payload: dict[str, object]) -> str:
@@ -281,68 +312,131 @@ def format_events(payload: dict[str, object]) -> str:
     summary = list(payload.get("summary") or [])
     recent = list(payload.get("recent") or [])
     lines = [
-        f"events generated {generated}",
-        f"ingest enabled {'yes' if payload.get('ingest_enabled') else 'no'}",
-        (
-            f"received total={int(payload.get('received_total') or 0)} "
-            f"retained={int(payload.get('retained_total') or 0)} "
-            f"retention={format_duration(payload.get('retention_seconds'))}"
-        ),
+        "Recent application events",
+        f"Generated at: {generated}",
+        f"Event ingestion enabled: {_yes_no(payload.get('ingest_enabled'))}",
+        "",
     ]
+    lines.extend(
+        _section_lines(
+            "Event retention",
+            [
+                ("Received total", int(payload.get("received_total") or 0)),
+                ("Retained events", int(payload.get("retained_total") or 0)),
+                ("Retention window", format_duration(payload.get("retention_seconds"))),
+            ],
+        )
+    )
 
+    lines.append("")
     if summary:
-        lines.append("summary:")
+        lines.append("Grouped activity:")
         for group in summary:
             lines.append(_line_for_event_group(group))
     else:
-        lines.append("summary: no recent event groups")
+        lines.append("Grouped activity:")
+        lines.append("- No recent event groups.")
 
+    lines.append("")
     if recent:
-        lines.append("recent:")
+        lines.append("Most recent raw events:")
         for event in recent:
             lines.append(_line_for_event(event))
     else:
-        lines.append("recent: no recent events")
+        lines.append("Most recent raw events:")
+        lines.append("- No recent events.")
     return "\n".join(lines)
 
 
-def _line_for_alert(alert: dict[str, object]) -> str:
-    bits = [
-        f"seq={alert.get('seq', 0)}",
-        str(alert.get("severity") or "info"),
-        str(alert.get("transition") or "noticed"),
-        str(alert.get("alert_class") or "<class>"),
-        str(alert.get("env") or "<env>"),
-        str(alert.get("source") or "<source>"),
-        str(alert.get("method") or "<method>"),
-        str(alert.get("route") or "<route>"),
-        f"name={alert.get('name', '<name>')}",
-    ]
-    labels = dict(alert.get("labels") or {})
-    if labels:
-        label_text = ",".join(f"{key}={value}" for key, value in sorted(labels.items()))
-        bits.append(f"labels={label_text}")
-    bits.append(f"summary={alert.get('summary', '')}")
-    detail = str(alert.get("detail") or "").strip()
-    if detail:
-        bits.append(f"detail={detail}")
-    return "- " + " ".join(bits)
+def _alert_heading(alert: dict[str, object]) -> str:
+    alert_class = str(alert.get("alert_class") or "<class>")
+    env = _display_env(alert.get("env"))
+    transition = str(alert.get("transition") or "noticed")
+    stats = dict(alert.get("stats") or {})
+    if alert_class == "route_error_rate_high":
+        if transition == "resolved":
+            return f"Alert resolved: Server error rate recovered on {env}"
+        return f"Alert: Elevated server error rate on {env}"
+    if alert_class == "route_seen_after_quiet_period":
+        if stats.get("startup_cold_start"):
+            return f"Alert: {env} route first seen after collector start"
+        return f"Alert: {env} route seen after quiet period"
+    return f"Alert: {alert_class} on {env}"
+
+
+def _humanize_alert_stat(key: str, value: object) -> tuple[str, str]:
+    if key in {"window_seconds", "quiet_period_seconds", "observed_quiet_seconds"}:
+        return (
+            {
+                "window_seconds": "Window length",
+                "quiet_period_seconds": "Configured quiet period",
+                "observed_quiet_seconds": "Observed quiet period",
+            }[key],
+            "n/a" if value is None else format_duration(value),
+        )
+    if key == "error_rate":
+        return ("Error rate", str(value))
+    if key == "latest_status":
+        return ("Latest HTTP status", str(value))
+    if key == "total_requests":
+        return ("Total requests in window", str(value))
+    if key == "error_requests":
+        return ("Error requests in window", str(value))
+    if key == "first_seen_utc":
+        return ("First seen in current window", str(value))
+    if key == "last_seen_utc":
+        return ("Last seen in current window", str(value))
+    if key == "last_seen_before_utc":
+        return ("Last seen before this event", str(value))
+    if key == "seen_at_utc":
+        return ("Seen at", str(value))
+    if key == "startup_cold_start":
+        return ("Collector cold start", _yes_no(value))
+    if key == "status_classes":
+        return ("Matching status classes", ", ".join(str(item) for item in value))
+    return (key.replace("_", " ").capitalize(), str(value))
 
 
 def format_alert_record(alert: dict[str, object]) -> str:
+    route_text = _describe_route_method(route=alert.get("route"), method=alert.get("method"))
+    labels = dict(alert.get("labels") or {})
+    stats = dict(alert.get("stats") or {})
     lines = [
-        f"alert seq={int(alert.get('seq') or 0)}",
-        f"class {alert.get('alert_class', '<class>')} transition {alert.get('transition', 'noticed')} severity {alert.get('severity', 'info')}",
-        f"route {alert.get('env', '<env>')} {alert.get('source', '<source>')} {alert.get('method', '<method>')} {alert.get('route', '<route>')}",
-        f"summary {alert.get('summary', '')}",
+        _alert_heading(alert),
+        f"Severity: {alert.get('severity', 'info')}",
+        f"Route: {route_text}",
+        f"Environment: {alert.get('env', '<env>')}",
+        f"Source service: {alert.get('source', '<source>')}",
+        "",
+        "What happened:",
+        str(alert.get("summary") or "<no summary>"),
     ]
     detail = str(alert.get("detail") or "").strip()
     if detail:
-        lines.append(f"detail {detail}")
-    stats = dict(alert.get("stats") or {})
+        lines.append("")
+        lines.append("Details:")
+        lines.append(detail)
+    lines.append("")
+    lines.extend(
+        _section_lines(
+            "Alert metadata",
+            [
+                ("Alert type", alert.get("alert_class", "<class>")),
+                ("Transition", alert.get("transition", "noticed")),
+                ("Sequence number", int(alert.get("seq") or 0)),
+                ("Event name", alert.get("name", "<name>")),
+                ("HTTP status", labels.get("status", "n/a")),
+                ("Event kind", labels.get("kind", "n/a")),
+                ("Alert emitted at", alert.get("emitted_at_utc", "n/a")),
+            ],
+        )
+    )
     if stats:
-        stat_text = " ".join(f"{key}={value}" for key, value in sorted(stats.items()))
-        lines.append(f"stats {stat_text}")
+        lines.append("")
+        lines.append("Alert stats:")
+        for key, value in sorted(stats.items()):
+            label, rendered = _humanize_alert_stat(key, value)
+            lines.append(f"- {label}: {rendered}")
     return "\n".join(lines)
 
 
@@ -350,26 +444,36 @@ def format_alerts(payload: dict[str, object]) -> str:
     generated = str(payload.get("generated_at_utc") or "")
     alerts = list(payload.get("alerts") or [])
     lines = [
-        f"alerts generated {generated}",
-        f"alerts enabled {'yes' if payload.get('alerts_enabled') else 'no'}",
-        (
-            f"emitted total={int(payload.get('emitted_total') or 0)} "
-            f"retained={int(payload.get('retained_total') or 0)} "
-            f"retention={format_duration(payload.get('retention_seconds'))}"
-        ),
-        (
-            f"seq oldest={int(payload.get('oldest_seq') or 0)} "
-            f"latest={int(payload.get('latest_seq') or 0)} "
-            f"after={payload.get('after') if payload.get('after') is not None else '-'} "
-            f"truncated={'yes' if payload.get('truncated') else 'no'}"
-        ),
+        "Alert feed",
+        f"Generated at: {generated}",
+        f"Alerts enabled: {_yes_no(payload.get('alerts_enabled'))}",
     ]
+    lines.append("")
+    lines.extend(
+        _section_lines(
+            "Feed state",
+            [
+                ("Total alerts emitted", int(payload.get("emitted_total") or 0)),
+                ("Retained alerts", int(payload.get("retained_total") or 0)),
+                ("Retention window", format_duration(payload.get("retention_seconds"))),
+                ("Oldest sequence", int(payload.get("oldest_seq") or 0)),
+                ("Latest sequence", int(payload.get("latest_seq") or 0)),
+                ("Requested after sequence", payload.get("after") if payload.get("after") is not None else "-"),
+                ("Feed truncated", _yes_no(payload.get("truncated"))),
+            ],
+        )
+    )
     if not alerts:
-        lines.append("alerts: no retained alerts")
+        lines.append("")
+        lines.append("Retained alerts:")
+        lines.append("- No retained alerts.")
         return "\n".join(lines)
-    lines.append("alerts:")
-    for alert in alerts:
-        lines.append(_line_for_alert(alert))
+    lines.append("")
+    lines.append("Retained alerts:")
+    for index, alert in enumerate(alerts):
+        if index:
+            lines.append("")
+        lines.append(format_alert_record(alert))
     return "\n".join(lines)
 
 
