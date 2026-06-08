@@ -208,20 +208,21 @@ class AlertRuleEngineTests(unittest.TestCase):
             now_utc=lambda: "2026-03-21T00:00:00Z",
         )
 
-        self.assertEqual(
-            engine.evaluate(
-                {
-                    "source": "vote-mcp-synthetic",
-                    "env": "demo",
-                    "kind": "synthetic.check",
-                    "name": "happypath",
-                    "labels": {"target": "demo", "result": "success"},
-                    "status": 500,
-                },
-                now=1.0,
-            ),
-            [],
-        )
+        for labels in ({"target": "demo", "result": "success"}, {"target": "demo"}):
+            self.assertEqual(
+                engine.evaluate(
+                    {
+                        "source": "vote-mcp-synthetic",
+                        "env": "demo",
+                        "kind": "synthetic.check",
+                        "name": "happypath",
+                        "labels": labels,
+                        "status": 500,
+                    },
+                    now=1.0,
+                ),
+                [],
+            )
 
 
 if __name__ == "__main__":

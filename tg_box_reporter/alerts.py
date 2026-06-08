@@ -152,16 +152,6 @@ def _synthetic_check_result(event: Mapping[str, object]) -> str | None:
     result = str(labels.get("result") or "").strip().lower()
     if result in {"failed", "ok"}:
         return result
-    if result:
-        return None
-
-    status = event.get("status")
-    if not isinstance(status, int):
-        return None
-    if 500 <= status <= 599:
-        return "failed"
-    if 200 <= status <= 399:
-        return "ok"
     return None
 
 
