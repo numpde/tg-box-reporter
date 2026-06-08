@@ -155,10 +155,10 @@ def build_synthetic_check_alert_key(event: Mapping[str, object]) -> SyntheticChe
 def _synthetic_check_result(event: Mapping[str, object]) -> str | None:
     labels = dict(event.get("labels") or {})
     result = str(labels.get("result") or "").strip().lower()
-    if result in {"failed", "failure", "fail", "error"}:
-        return "failed"
-    if result in {"ok", "success", "passed", "pass", "recovered"}:
-        return "ok"
+    if result in {"failed", "ok"}:
+        return result
+    if result:
+        return None
 
     status = event.get("status")
     if not isinstance(status, int):
@@ -415,7 +415,7 @@ class AlertRuleEngine:
             stats["latest_status"] = status
         duration_ms = event.get("duration_ms")
         if duration_ms is not None:
-            stats["duration_ms"] = str(duration_ms)
+            stats["duration_ms"] = duration_ms
 
         if result == "failed":
             if state.open:

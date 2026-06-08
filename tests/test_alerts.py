@@ -200,6 +200,30 @@ class AlertRuleEngineTests(unittest.TestCase):
             [],
         )
 
+    def test_synthetic_check_result_label_is_strict(self) -> None:
+        engine = AlertRuleEngine(
+            CollectorAlertsConfig(
+                enabled=True,
+                synthetic_check=SyntheticCheckConfig(enabled=True),
+            ),
+            now_utc=lambda: "2026-03-21T00:00:00Z",
+        )
+
+        self.assertEqual(
+            engine.evaluate(
+                {
+                    "source": "vote-mcp-synthetic",
+                    "env": "demo",
+                    "kind": "synthetic.check",
+                    "name": "happypath",
+                    "labels": {"target": "demo", "result": "success"},
+                    "status": 500,
+                },
+                now=1.0,
+            ),
+            [],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
