@@ -361,6 +361,10 @@ def _alert_heading(alert: dict[str, object]) -> str:
         if stats.get("startup_cold_start"):
             return f"Alert: {env} route first seen after collector start"
         return f"Alert: {env} route seen after quiet period"
+    if alert_class == "synthetic_check_failed":
+        if transition == "resolved":
+            return f"Alert resolved: Synthetic check recovered on {env}"
+        return f"Alert: Synthetic check failed on {env}"
     return f"Alert: {alert_class} on {env}"
 
 
@@ -378,6 +382,12 @@ def _humanize_alert_stat(key: str, value: object) -> tuple[str, str]:
         return ("Error rate", str(value))
     if key == "latest_status":
         return ("Latest HTTP status", str(value))
+    if key == "duration_ms":
+        return ("Duration", f"{value} ms")
+    if key == "target":
+        return ("Synthetic target", str(value))
+    if key == "result":
+        return ("Synthetic result", str(value))
     if key == "total_requests":
         return ("Total requests in window", str(value))
     if key == "error_requests":
@@ -401,10 +411,13 @@ def format_alert_record(alert: dict[str, object]) -> str:
     route_text = _describe_route_method(route=alert.get("route"), method=alert.get("method"))
     labels = dict(alert.get("labels") or {})
     stats = dict(alert.get("stats") or {})
+    alert_class = str(alert.get("alert_class") or "")
+    target = str(alert.get("target") or labels.get("target") or "n/a")
+    subject_line = f"Synthetic target: {target}" if alert_class == "synthetic_check_failed" else f"Route: {route_text}"
     lines = [
         _alert_heading(alert),
         f"Severity: {alert.get('severity', 'info')}",
-        f"Route: {route_text}",
+        subject_line,
         f"Environment: {alert.get('env', '<env>')}",
         f"Source service: {alert.get('source', '<source>')}",
         "",

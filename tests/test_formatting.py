@@ -209,6 +209,30 @@ class FormattingTests(unittest.TestCase):
         self.assertIn("Alert stats:", rendered)
         self.assertIn("- Observed quiet period: 6h0m0s", rendered)
 
+    def test_format_alert_record_renders_synthetic_check_target(self) -> None:
+        rendered = format_alert_record(
+            {
+                "seq": 4,
+                "alert_class": "synthetic_check_failed",
+                "transition": "opened",
+                "severity": "warning",
+                "env": "prod",
+                "source": "vote-mcp-synthetic",
+                "target": "prod",
+                "name": "happypath",
+                "summary": "prod happypath synthetic check failed for prod",
+                "detail": "walkthrough failed",
+                "labels": {"kind": "synthetic.check", "status": "500", "result": "failed", "target": "prod"},
+                "stats": {"duration_ms": "1200", "result": "failed", "target": "prod"},
+            }
+        )
+
+        self.assertIn("Alert: Synthetic check failed on Prod", rendered)
+        self.assertIn("Synthetic target: prod", rendered)
+        self.assertNotIn("Route:", rendered)
+        self.assertIn("- Synthetic result: failed", rendered)
+        self.assertIn("- Duration: 1200 ms", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

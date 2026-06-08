@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from tg_box_reporter.alerts import CollectorAlertsConfig, RouteErrorRateHighConfig
+from tg_box_reporter.alerts import CollectorAlertsConfig, RouteErrorRateHighConfig, SyntheticCheckConfig
 from tg_box_reporter.events import EventStore, EventValidationError, normalize_event
 
 
@@ -135,6 +135,47 @@ class EventStoreTests(unittest.TestCase):
         self.assertEqual(payload["latest_seq"], 1)
         self.assertEqual(payload["alerts"][0]["alert_class"], "route_error_rate_high")
         self.assertEqual(payload["alerts"][0]["transition"], "opened")
+
+    def test_event_store_exposes_synthetic_check_open_and_resolve_alerts(self) -> None:
+        current = [0.0]
+
+        def clock() -> float:
+            return current[0]
+
+        def now_utc() -> str:
+            return f"2026-03-21T00:00:{int(current[0]):02d}Z"
+
+        store = EventStore(
+            max_recent=10,
+            retention_seconds=3600,
+            alerts_config=CollectorAlertsConfig(
+                enabled=True,
+                synthetic_check=SyntheticCheckConfig(enabled=True),
+            ),
+            clock=clock,
+            now_utc=now_utc,
+        )
+
+        base_event = {
+            "source": "vote-mcp-synthetic",
+            "env": "demo",
+            "kind": "synthetic.check",
+            "name": "happypath",
+            "labels": {"target": "demo"},
+        }
+        store.ingest({**base_event, "labels": {"target": "demo", "result": "failed"}, "status": 500})
+        current[0] = 1.0
+        store.ingest({**base_event, "labels": {"target": "demo", "result": "failed"}, "status": 500})
+        current[0] = 2.0
+        store.ingest({**base_event, "labels": {"target": "demo", "result": "ok"}, "status": 200})
+
+        payload = store.alerts_snapshot()
+
+        self.assertEqual(payload["emitted_total"], 2)
+        self.assertEqual(payload["retained_total"], 2)
+        self.assertEqual([alert["transition"] for alert in payload["alerts"]], ["opened", "resolved"])
+        self.assertEqual(payload["alerts"][0]["alert_class"], "synthetic_check_failed")
+        self.assertEqual(payload["alerts"][0]["target"], "demo")
 
 
 if __name__ == "__main__":

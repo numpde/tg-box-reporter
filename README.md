@@ -105,6 +105,7 @@ Collector:
 - `COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_ALLOWLIST_REGEX`
 - `COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_PERIOD_SECONDS`
 - `COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_EMIT_ON_FIRST_SEEN`
+- `COLLECTOR_ALERT_SYNTHETIC_CHECK_ENABLED`
 
 Relay:
 
@@ -170,12 +171,13 @@ Threshold env vars are collector-side SSoT for problem detection. Set them to a 
 `COLLECTOR_DOCKER_TIMEOUT_SECONDS` bounds each Docker CLI call so the collector degrades cleanly instead of hanging forever.
 `POST /events` accepts authenticated JSON events when `COLLECTOR_EVENT_TOKEN` is set.
 `COLLECTOR_SHARED_NETWORK` and `COLLECTOR_SHARED_ALIAS` are only used by the optional shared-network compose override.
-Alert rules are collector-owned: the collector evaluates thresholds, dedupes transitions, and exposes the canonical `/alerts` feed. The relay only polls and delivers alert records.
+Alert rules are collector-owned: the collector evaluates thresholds, dedupes transitions, and exposes the canonical `/alerts` feed. The relay only polls and delivers alert records. `synthetic.check` events open a synthetic-check alert on failure, dedupe repeated failures for the same source/env/name/target, and resolve when the next success arrives.
 
 The built-in event-derived alert classes are:
 
 - `route_error_rate_high`: route-level rolling error-rate alert, `5xx` by default
 - `route_seen_after_quiet_period`: one-shot notice when a route is first seen after collector start or seen again after a configured quiet period
+- `synthetic_check_failed`: failure/recovery alert for `synthetic.check` events keyed by source/env/name/target
 
 ## Health Model
 

@@ -7,6 +7,7 @@ from tg_box_reporter.alerts import (
     CollectorAlertsConfig,
     RouteErrorRateHighConfig,
     RouteSeenAfterQuietConfig,
+    SyntheticCheckConfig,
 )
 
 
@@ -116,6 +117,88 @@ class AlertRuleEngineTests(unittest.TestCase):
         }
 
         self.assertEqual(engine.evaluate(event, now=0.0), [])
+
+    def test_synthetic_check_opens_dedupes_and_resolves(self) -> None:
+        engine = AlertRuleEngine(
+            CollectorAlertsConfig(
+                enabled=True,
+                synthetic_check=SyntheticCheckConfig(enabled=True),
+            ),
+            now_utc=lambda: "2026-03-21T00:00:00Z",
+        )
+
+        event = {
+            "source": "vote-mcp-synthetic",
+            "env": "prod",
+            "kind": "synthetic.check",
+            "name": "happypath",
+            "labels": {"target": "prod", "result": "failed"},
+            "status": 500,
+            "duration_ms": 1200,
+            "detail": "walkthrough failed",
+            "ts": "2026-03-21T00:00:01Z",
+        }
+
+        opened = engine.evaluate(event, now=1.0)
+        self.assertEqual(len(opened), 1)
+        self.assertEqual(opened[0]["alert_class"], "synthetic_check_failed")
+        self.assertEqual(opened[0]["transition"], "opened")
+        self.assertEqual(opened[0]["dedupe_key"], "synthetic_check_failed:vote-mcp-synthetic:prod:happypath:prod")
+        self.assertEqual(opened[0]["target"], "prod")
+        self.assertEqual(opened[0]["stats"]["result"], "failed")
+
+        self.assertEqual(engine.evaluate({**event, "ts": "2026-03-21T00:00:02Z"}, now=2.0), [])
+
+        resolved = engine.evaluate(
+            {
+                **event,
+                "labels": {"target": "prod", "result": "ok"},
+                "status": 200,
+                "duration_ms": 900,
+                "detail": "walkthrough completed",
+                "ts": "2026-03-21T00:00:03Z",
+            },
+            now=3.0,
+        )
+        self.assertEqual(len(resolved), 1)
+        self.assertEqual(resolved[0]["alert_class"], "synthetic_check_failed")
+        self.assertEqual(resolved[0]["transition"], "resolved")
+        self.assertEqual(resolved[0]["starts_at_utc"], "2026-03-21T00:00:01Z")
+        self.assertEqual(resolved[0]["stats"]["result"], "ok")
+
+        self.assertEqual(
+            engine.evaluate(
+                {
+                    **event,
+                    "labels": {"target": "prod", "result": "ok"},
+                    "status": 200,
+                    "ts": "2026-03-21T00:00:04Z",
+                },
+                now=4.0,
+            ),
+            [],
+        )
+
+    def test_synthetic_check_alerts_are_explicitly_enabled(self) -> None:
+        engine = AlertRuleEngine(
+            CollectorAlertsConfig(enabled=True),
+            now_utc=lambda: "2026-03-21T00:00:00Z",
+        )
+
+        self.assertEqual(
+            engine.evaluate(
+                {
+                    "source": "vote-mcp-synthetic",
+                    "env": "demo",
+                    "kind": "synthetic.check",
+                    "name": "happypath",
+                    "labels": {"target": "demo", "result": "failed"},
+                    "status": 500,
+                },
+                now=1.0,
+            ),
+            [],
+        )
 
 
 if __name__ == "__main__":

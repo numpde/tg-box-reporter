@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Pattern
 
-from .alerts import CollectorAlertsConfig, RouteErrorRateHighConfig, RouteSeenAfterQuietConfig
+from .alerts import CollectorAlertsConfig, RouteErrorRateHighConfig, RouteSeenAfterQuietConfig, SyntheticCheckConfig
 
 
 class ConfigError(ValueError):
@@ -209,6 +209,9 @@ class CollectorConfig:
             ),
             emit_on_first_seen=_bool("COLLECTOR_ALERT_ROUTE_SEEN_AFTER_QUIET_EMIT_ON_FIRST_SEEN", True),
         )
+        synthetic_check = SyntheticCheckConfig(
+            enabled=_bool("COLLECTOR_ALERT_SYNTHETIC_CHECK_ENABLED", False),
+        )
 
         return cls(
             bind_host=_optional("COLLECTOR_BIND_HOST", "127.0.0.1") or "127.0.0.1",
@@ -292,6 +295,7 @@ class CollectorConfig:
                 ),
                 route_error_rate_high=route_error_rate_high,
                 route_seen_after_quiet=route_seen_after_quiet,
+                synthetic_check=synthetic_check,
             ),
         )
 

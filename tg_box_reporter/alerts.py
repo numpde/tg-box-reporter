@@ -42,6 +42,17 @@ class RouteAlertKey:
 
 
 @dataclass(frozen=True)
+class SyntheticCheckAlertKey:
+    source: str
+    env: str
+    name: str
+    target: str
+
+    def dedupe_suffix(self) -> str:
+        return f"{self.source}:{self.env}:{self.name}:{self.target}"
+
+
+@dataclass(frozen=True)
 class RouteErrorRateHighConfig:
     enabled: bool = False
     allowlist_regex: Pattern[str] | None = None
@@ -68,12 +79,18 @@ class RouteSeenAfterQuietConfig:
 
 
 @dataclass(frozen=True)
+class SyntheticCheckConfig:
+    enabled: bool = False
+
+
+@dataclass(frozen=True)
 class CollectorAlertsConfig:
     enabled: bool = False
     max_recent: int = 200
     retention_seconds: int = 86400
     route_error_rate_high: RouteErrorRateHighConfig = RouteErrorRateHighConfig()
     route_seen_after_quiet: RouteSeenAfterQuietConfig = RouteSeenAfterQuietConfig()
+    synthetic_check: SyntheticCheckConfig = SyntheticCheckConfig()
 
     @property
     def state_retention_seconds(self) -> int:
@@ -98,6 +115,13 @@ class _RouteQuietState:
     last_seen_at: float | None = None
 
 
+@dataclass
+class _SyntheticCheckState:
+    open: bool = False
+    opened_at_utc: str | None = None
+    last_seen_at: float = 0.0
+
+
 def build_route_alert_key(event: Mapping[str, object]) -> RouteAlertKey | None:
     route = str(event.get("route") or "").strip()
     method = str(event.get("method") or "").strip()
@@ -111,6 +135,41 @@ def build_route_alert_key(event: Mapping[str, object]) -> RouteAlertKey | None:
     )
 
 
+def build_synthetic_check_alert_key(event: Mapping[str, object]) -> SyntheticCheckAlertKey | None:
+    kind = str(event.get("kind") or "").strip()
+    if kind != "synthetic.check":
+        return None
+    labels = dict(event.get("labels") or {})
+    name = str(event.get("name") or "").strip()
+    target = str(labels.get("target") or "").strip()
+    if not name or not target:
+        return None
+    return SyntheticCheckAlertKey(
+        source=str(event.get("source") or "<source>"),
+        env=str(event.get("env") or "<env>"),
+        name=name,
+        target=target,
+    )
+
+
+def _synthetic_check_result(event: Mapping[str, object]) -> str | None:
+    labels = dict(event.get("labels") or {})
+    result = str(labels.get("result") or "").strip().lower()
+    if result in {"failed", "failure", "fail", "error"}:
+        return "failed"
+    if result in {"ok", "success", "passed", "pass", "recovered"}:
+        return "ok"
+
+    status = event.get("status")
+    if not isinstance(status, int):
+        return None
+    if 500 <= status <= 599:
+        return "failed"
+    if 200 <= status <= 399:
+        return "ok"
+    return None
+
+
 class AlertRuleEngine:
     def __init__(
         self,
@@ -122,17 +181,22 @@ class AlertRuleEngine:
         self.now_utc = now_utc
         self._error_states: dict[RouteAlertKey, _RouteErrorWindowState] = {}
         self._quiet_states: dict[RouteAlertKey, _RouteQuietState] = {}
+        self._synthetic_states: dict[SyntheticCheckAlertKey, _SyntheticCheckState] = {}
 
     def evaluate(self, event: Mapping[str, object], *, now: float) -> list[dict[str, object]]:
         if not self.config.enabled:
             return []
-        key = build_route_alert_key(event)
-        if key is None:
-            return []
 
         alerts: list[dict[str, object]] = []
-        alerts.extend(self._evaluate_route_error_rate_high(key, event, now=now))
-        alerts.extend(self._evaluate_route_seen_after_quiet(key, event, now=now))
+        route_key = build_route_alert_key(event)
+        if route_key is not None:
+            alerts.extend(self._evaluate_route_error_rate_high(route_key, event, now=now))
+            alerts.extend(self._evaluate_route_seen_after_quiet(route_key, event, now=now))
+
+        synthetic_key = build_synthetic_check_alert_key(event)
+        if synthetic_key is not None:
+            alerts.extend(self._evaluate_synthetic_check(synthetic_key, event, now=now))
+
         return alerts
 
     def prune(self, *, now: float) -> None:
@@ -146,6 +210,10 @@ class AlertRuleEngine:
         for key, state in list(self._quiet_states.items()):
             if state.last_seen_at is None or state.last_seen_at < cutoff:
                 self._quiet_states.pop(key, None)
+
+        for key, state in list(self._synthetic_states.items()):
+            if not state.open and state.last_seen_at < cutoff:
+                self._synthetic_states.pop(key, None)
 
     def _evaluate_route_error_rate_high(
         self,
@@ -319,6 +387,72 @@ class AlertRuleEngine:
             )
         ]
 
+    def _evaluate_synthetic_check(
+        self,
+        key: SyntheticCheckAlertKey,
+        event: Mapping[str, object],
+        *,
+        now: float,
+    ) -> list[dict[str, object]]:
+        rule = self.config.synthetic_check
+        if not rule.enabled:
+            return []
+
+        result = _synthetic_check_result(event)
+        if result is None:
+            return []
+
+        state = self._synthetic_states.setdefault(key, _SyntheticCheckState())
+        state.last_seen_at = now
+        seen_at_utc = str(event.get("ts") or event.get("received_at_utc") or self.now_utc())
+        status = event.get("status")
+        stats: dict[str, object] = {
+            "result": result,
+            "target": key.target,
+            "seen_at_utc": seen_at_utc,
+        }
+        if isinstance(status, int):
+            stats["latest_status"] = status
+        duration_ms = event.get("duration_ms")
+        if duration_ms is not None:
+            stats["duration_ms"] = str(duration_ms)
+
+        if result == "failed":
+            if state.open:
+                return []
+            state.open = True
+            state.opened_at_utc = seen_at_utc
+            return [
+                self._build_synthetic_check_alert_record(
+                    alert_class="synthetic_check_failed",
+                    transition="opened",
+                    severity="warning",
+                    key=key,
+                    event=event,
+                    starts_at_utc=state.opened_at_utc,
+                    summary=f"{key.env} {key.name} synthetic check failed for {key.target}",
+                    detail=str(event.get("detail") or "Synthetic check failed."),
+                    stats=stats,
+                )
+            ]
+
+        if not state.open:
+            return []
+        alert = self._build_synthetic_check_alert_record(
+            alert_class="synthetic_check_failed",
+            transition="resolved",
+            severity="info",
+            key=key,
+            event=event,
+            starts_at_utc=state.opened_at_utc or seen_at_utc,
+            summary=f"{key.env} {key.name} synthetic check recovered for {key.target}",
+            detail=str(event.get("detail") or "Synthetic check recovered."),
+            stats=stats,
+        )
+        state.open = False
+        state.opened_at_utc = None
+        return [alert]
+
     def _build_alert_record(
         self,
         *,
@@ -346,6 +480,41 @@ class AlertRuleEngine:
             "method": key.method,
             "route": key.route,
             "name": str(event.get("name") or "<name>"),
+            "summary": summary,
+            "detail": detail,
+            "labels": labels,
+            "starts_at_utc": starts_at_utc,
+            "emitted_at_utc": self.now_utc(),
+            "stats": dict(stats),
+        }
+
+    def _build_synthetic_check_alert_record(
+        self,
+        *,
+        alert_class: str,
+        transition: str,
+        severity: str,
+        key: SyntheticCheckAlertKey,
+        event: Mapping[str, object],
+        starts_at_utc: str,
+        summary: str,
+        detail: str,
+        stats: Mapping[str, object],
+    ) -> dict[str, object]:
+        labels = dict(event.get("labels") or {})
+        labels["kind"] = str(event.get("kind") or "<kind>")
+        labels["target"] = key.target
+        if event.get("status") is not None:
+            labels["status"] = str(event["status"])
+        return {
+            "alert_class": alert_class,
+            "transition": transition,
+            "severity": severity,
+            "dedupe_key": f"{alert_class}:{key.dedupe_suffix()}",
+            "source": key.source,
+            "env": key.env,
+            "target": key.target,
+            "name": key.name,
             "summary": summary,
             "detail": detail,
             "labels": labels,
