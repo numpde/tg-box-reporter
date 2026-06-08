@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from tg_box_reporter.alerts import CollectorAlertsConfig, RouteErrorRateHighConfig, SyntheticCheckConfig
+from tg_box_reporter.alerts import CollectorAlertsConfig, RouteErrorRateHighConfig
 from tg_box_reporter.events import EventStore, EventValidationError, normalize_event
 
 
@@ -150,7 +150,7 @@ class EventStoreTests(unittest.TestCase):
             retention_seconds=3600,
             alerts_config=CollectorAlertsConfig(
                 enabled=True,
-                synthetic_check=SyntheticCheckConfig(enabled=True),
+                synthetic_check_enabled=True,
             ),
             clock=clock,
             now_utc=now_utc,

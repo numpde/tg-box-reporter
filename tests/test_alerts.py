@@ -7,7 +7,6 @@ from tg_box_reporter.alerts import (
     CollectorAlertsConfig,
     RouteErrorRateHighConfig,
     RouteSeenAfterQuietConfig,
-    SyntheticCheckConfig,
 )
 
 
@@ -122,7 +121,7 @@ class AlertRuleEngineTests(unittest.TestCase):
         engine = AlertRuleEngine(
             CollectorAlertsConfig(
                 enabled=True,
-                synthetic_check=SyntheticCheckConfig(enabled=True),
+                synthetic_check_enabled=True,
             ),
             now_utc=lambda: "2026-03-21T00:00:00Z",
         )
@@ -204,7 +203,7 @@ class AlertRuleEngineTests(unittest.TestCase):
         engine = AlertRuleEngine(
             CollectorAlertsConfig(
                 enabled=True,
-                synthetic_check=SyntheticCheckConfig(enabled=True),
+                synthetic_check_enabled=True,
             ),
             now_utc=lambda: "2026-03-21T00:00:00Z",
         )

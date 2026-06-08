@@ -79,18 +79,13 @@ class RouteSeenAfterQuietConfig:
 
 
 @dataclass(frozen=True)
-class SyntheticCheckConfig:
-    enabled: bool = False
-
-
-@dataclass(frozen=True)
 class CollectorAlertsConfig:
     enabled: bool = False
     max_recent: int = 200
     retention_seconds: int = 86400
     route_error_rate_high: RouteErrorRateHighConfig = RouteErrorRateHighConfig()
     route_seen_after_quiet: RouteSeenAfterQuietConfig = RouteSeenAfterQuietConfig()
-    synthetic_check: SyntheticCheckConfig = SyntheticCheckConfig()
+    synthetic_check_enabled: bool = False
 
     @property
     def state_retention_seconds(self) -> int:
@@ -394,8 +389,7 @@ class AlertRuleEngine:
         *,
         now: float,
     ) -> list[dict[str, object]]:
-        rule = self.config.synthetic_check
-        if not rule.enabled:
+        if not self.config.synthetic_check_enabled:
             return []
 
         result = _synthetic_check_result(event)
