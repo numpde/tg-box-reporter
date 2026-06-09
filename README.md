@@ -192,8 +192,8 @@ The built-in event-derived alert classes are:
 This repo now includes generic deployment artifacts:
 
 - [Dockerfile](Dockerfile): one image for both collector and relay
-- [docker-compose.example.yml](docker-compose.example.yml): sample two-service stack
-- [docker-compose.shared-network.example.yml](docker-compose.shared-network.example.yml): optional collector-only attach to an external Docker network for cross-container event ingress
+- [compose.yml](compose.yml): two-service collector/relay stack
+- [compose.shared-network.yml](compose.shared-network.yml): optional collector-only attach to an external Docker network for cross-container event ingress
 - [collector.env.example](contrib/env/collector.env.example): split collector env file
 - [relay.env.example](contrib/env/relay.env.example): split relay env file
 - [tg-box-collector.service](contrib/systemd/tg-box-collector.service): host service unit
@@ -202,7 +202,7 @@ This repo now includes generic deployment artifacts:
 Container stack example:
 
 ```bash
-TG_BOT_TOKEN=... TG_CHAT_ID=... docker compose -f docker-compose.example.yml up -d --build
+TG_BOT_TOKEN=... TG_CHAT_ID=... docker compose up -d --build
 ```
 
 If other containers need Docker-DNS reachability to the collector for `POST /events`, keep that off the base stack and add the optional override instead:
@@ -213,8 +213,8 @@ COLLECTOR_SHARED_NETWORK=tg-reporting \
 COLLECTOR_SHARED_ALIAS=tg-box-collector \
 TG_BOT_TOKEN=... TG_CHAT_ID=... \
 docker compose \
-  -f docker-compose.example.yml \
-  -f docker-compose.shared-network.example.yml \
+  -f compose.yml \
+  -f compose.shared-network.yml \
   up -d --build
 ```
 
