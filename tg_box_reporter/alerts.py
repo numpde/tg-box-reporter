@@ -421,7 +421,19 @@ class AlertRuleEngine:
             ]
 
         if not state.open:
-            return []
+            return [
+                self._build_synthetic_check_alert_record(
+                    alert_class="synthetic_check_succeeded",
+                    transition="noticed",
+                    severity="info",
+                    key=key,
+                    event=event,
+                    starts_at_utc=seen_at_utc,
+                    summary=f"{key.env} {key.name} synthetic check succeeded for {key.target}",
+                    detail=str(event.get("detail") or "Synthetic check succeeded."),
+                    stats=stats,
+                )
+            ]
         alert = self._build_synthetic_check_alert_record(
             alert_class="synthetic_check_failed",
             transition="resolved",

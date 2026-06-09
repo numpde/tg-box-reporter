@@ -365,6 +365,8 @@ def _alert_heading(alert: dict[str, object]) -> str:
         if transition == "resolved":
             return f"Alert resolved: Synthetic check recovered on {env}"
         return f"Alert: Synthetic check failed on {env}"
+    if alert_class == "synthetic_check_succeeded":
+        return f"Alert: Synthetic check succeeded on {env}"
     return f"Alert: {alert_class} on {env}"
 
 
@@ -413,7 +415,8 @@ def format_alert_record(alert: dict[str, object]) -> str:
     stats = dict(alert.get("stats") or {})
     alert_class = str(alert.get("alert_class") or "")
     target = str(alert.get("target") or labels.get("target") or "n/a")
-    subject_line = f"Synthetic target: {target}" if alert_class == "synthetic_check_failed" else f"Route: {route_text}"
+    is_synthetic_check = alert_class in {"synthetic_check_failed", "synthetic_check_succeeded"}
+    subject_line = f"Synthetic target: {target}" if is_synthetic_check else f"Route: {route_text}"
     lines = [
         _alert_heading(alert),
         f"Severity: {alert.get('severity', 'info')}",

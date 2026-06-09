@@ -165,18 +165,54 @@ class AlertRuleEngineTests(unittest.TestCase):
         self.assertEqual(resolved[0]["starts_at_utc"], "2026-03-21T00:00:01Z")
         self.assertEqual(resolved[0]["stats"]["result"], "ok")
 
-        self.assertEqual(
-            engine.evaluate(
-                {
-                    **event,
-                    "labels": {"target": "prod", "result": "ok"},
-                    "status": 200,
-                    "ts": "2026-03-21T00:00:04Z",
-                },
-                now=4.0,
-            ),
-            [],
+        succeeded = engine.evaluate(
+            {
+                **event,
+                "labels": {"target": "prod", "result": "ok"},
+                "status": 200,
+                "duration_ms": 850,
+                "detail": "walkthrough completed",
+                "ts": "2026-03-21T00:00:04Z",
+            },
+            now=4.0,
         )
+        self.assertEqual(len(succeeded), 1)
+        self.assertEqual(succeeded[0]["alert_class"], "synthetic_check_succeeded")
+        self.assertEqual(succeeded[0]["transition"], "noticed")
+        self.assertEqual(succeeded[0]["dedupe_key"], "synthetic_check_succeeded:vote-mcp-synthetic:prod:happypath:prod")
+        self.assertEqual(succeeded[0]["stats"]["result"], "ok")
+
+    def test_synthetic_check_success_alerts_without_prior_failure(self) -> None:
+        engine = AlertRuleEngine(
+            CollectorAlertsConfig(
+                enabled=True,
+                synthetic_check_enabled=True,
+            ),
+            now_utc=lambda: "2026-03-21T00:00:00Z",
+        )
+
+        alerts = engine.evaluate(
+            {
+                "source": "vote-mcp-synthetic",
+                "env": "demo",
+                "kind": "synthetic.check",
+                "name": "happypath",
+                "labels": {"target": "demo", "result": "ok"},
+                "status": 200,
+                "duration_ms": 1234,
+                "detail": "walkthrough completed",
+                "ts": "2026-03-21T00:00:01Z",
+            },
+            now=1.0,
+        )
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["alert_class"], "synthetic_check_succeeded")
+        self.assertEqual(alerts[0]["transition"], "noticed")
+        self.assertEqual(alerts[0]["severity"], "info")
+        self.assertEqual(alerts[0]["summary"], "demo happypath synthetic check succeeded for demo")
+        self.assertEqual(alerts[0]["target"], "demo")
+        self.assertEqual(alerts[0]["stats"]["result"], "ok")
 
     def test_synthetic_check_alerts_are_explicitly_enabled(self) -> None:
         engine = AlertRuleEngine(

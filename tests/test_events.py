@@ -168,14 +168,17 @@ class EventStoreTests(unittest.TestCase):
         store.ingest({**base_event, "labels": {"target": "demo", "result": "failed"}, "status": 500})
         current[0] = 2.0
         store.ingest({**base_event, "labels": {"target": "demo", "result": "ok"}, "status": 200})
+        current[0] = 3.0
+        store.ingest({**base_event, "labels": {"target": "demo", "result": "ok"}, "status": 200})
 
         payload = store.alerts_snapshot()
 
-        self.assertEqual(payload["emitted_total"], 2)
-        self.assertEqual(payload["retained_total"], 2)
-        self.assertEqual([alert["transition"] for alert in payload["alerts"]], ["opened", "resolved"])
+        self.assertEqual(payload["emitted_total"], 3)
+        self.assertEqual(payload["retained_total"], 3)
+        self.assertEqual([alert["transition"] for alert in payload["alerts"]], ["opened", "resolved", "noticed"])
         self.assertEqual(payload["alerts"][0]["alert_class"], "synthetic_check_failed")
         self.assertEqual(payload["alerts"][0]["target"], "demo")
+        self.assertEqual(payload["alerts"][2]["alert_class"], "synthetic_check_succeeded")
 
 
 if __name__ == "__main__":

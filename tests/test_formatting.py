@@ -233,6 +233,29 @@ class FormattingTests(unittest.TestCase):
         self.assertIn("- Synthetic result: failed", rendered)
         self.assertIn("- Duration: 1200 ms", rendered)
 
+    def test_format_alert_record_renders_synthetic_check_success(self) -> None:
+        rendered = format_alert_record(
+            {
+                "seq": 5,
+                "alert_class": "synthetic_check_succeeded",
+                "transition": "noticed",
+                "severity": "info",
+                "env": "demo",
+                "source": "vote-mcp-synthetic",
+                "target": "demo",
+                "name": "happypath",
+                "summary": "demo happypath synthetic check succeeded for demo",
+                "detail": "walkthrough completed",
+                "labels": {"kind": "synthetic.check", "status": "200", "result": "ok", "target": "demo"},
+                "stats": {"duration_ms": "900", "result": "ok", "target": "demo"},
+            }
+        )
+
+        self.assertIn("Alert: Synthetic check succeeded on Demo", rendered)
+        self.assertIn("Synthetic target: demo", rendered)
+        self.assertNotIn("Route:", rendered)
+        self.assertIn("- Synthetic result: ok", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()
