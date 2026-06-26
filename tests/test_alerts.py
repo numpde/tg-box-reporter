@@ -54,6 +54,40 @@ class AlertRuleEngineTests(unittest.TestCase):
         self.assertEqual(resolved[0]["stats"]["error_requests"], 2)
         self.assertEqual(resolved[0]["stats"]["total_requests"], 4)
 
+    def test_synthetic_happypath_traffic_still_counts_for_route_error_rate(self) -> None:
+        engine = AlertRuleEngine(
+            CollectorAlertsConfig(
+                enabled=True,
+                route_error_rate_high=RouteErrorRateHighConfig(
+                    enabled=True,
+                    window_seconds=60,
+                    min_requests=2,
+                    min_errors=2,
+                    error_rate_gt=0.5,
+                ),
+                route_seen_after_quiet=RouteSeenAfterQuietConfig(enabled=True),
+            ),
+            now_utc=lambda: "2026-03-21T00:00:00Z",
+        )
+
+        base_event = {
+            "source": "vote-mcp",
+            "env": "prod",
+            "kind": "http.request",
+            "name": "poll_results",
+            "route": "/api/v1/polls/{poll_id}/results",
+            "method": "GET",
+            "status": 503,
+            "labels": {"traffic": "synthetic", "synthetic_check": "happypath"},
+        }
+
+        self.assertEqual(engine.evaluate({**base_event, "ts": "2026-03-21T00:00:01Z"}, now=1.0), [])
+
+        opened = engine.evaluate({**base_event, "ts": "2026-03-21T00:00:02Z"}, now=2.0)
+        self.assertEqual(len(opened), 1)
+        self.assertEqual(opened[0]["alert_class"], "route_error_rate_high")
+        self.assertEqual(opened[0]["stats"]["error_requests"], 2)
+
     def test_route_seen_after_quiet_fires_on_first_seen_by_default(self) -> None:
         engine = AlertRuleEngine(
             CollectorAlertsConfig(
@@ -116,6 +150,69 @@ class AlertRuleEngineTests(unittest.TestCase):
         }
 
         self.assertEqual(engine.evaluate(event, now=0.0), [])
+
+    def test_route_seen_after_quiet_ignores_synthetic_traffic_without_refreshing_state(self) -> None:
+        engine = AlertRuleEngine(
+            CollectorAlertsConfig(
+                enabled=True,
+                route_seen_after_quiet=RouteSeenAfterQuietConfig(
+                    enabled=True,
+                    quiet_period_seconds=10,
+                ),
+            ),
+            now_utc=lambda: "2026-03-21T00:00:00Z",
+        )
+
+        event = {
+            "source": "vote-mcp",
+            "env": "prod",
+            "kind": "http.request",
+            "name": "poll_results",
+            "route": "/api/v1/polls/{poll_id}/results",
+            "method": "GET",
+            "ts": "2026-03-21T00:00:00Z",
+        }
+        synthetic_event = {
+            **event,
+            "labels": {"traffic": "synthetic", "synthetic_check": "happypath"},
+        }
+
+        self.assertEqual(engine.evaluate(synthetic_event, now=0.0), [])
+
+        first_real = engine.evaluate({**event, "ts": "2026-03-21T00:00:05Z"}, now=5.0)
+        self.assertEqual(len(first_real), 1)
+        self.assertTrue(first_real[0]["stats"]["startup_cold_start"])
+
+        self.assertEqual(engine.evaluate({**synthetic_event, "ts": "2026-03-21T00:00:12Z"}, now=12.0), [])
+
+        resumed = engine.evaluate({**event, "ts": "2026-03-21T00:00:16Z"}, now=16.0)
+        self.assertEqual(len(resumed), 1)
+        self.assertEqual(resumed[0]["stats"]["observed_quiet_seconds"], 11)
+
+    def test_route_seen_after_quiet_does_not_ignore_generic_synthetic_label(self) -> None:
+        engine = AlertRuleEngine(
+            CollectorAlertsConfig(
+                enabled=True,
+                route_seen_after_quiet=RouteSeenAfterQuietConfig(enabled=True),
+            ),
+            now_utc=lambda: "2026-03-21T00:00:00Z",
+        )
+
+        alerts = engine.evaluate(
+            {
+                "source": "vote-mcp",
+                "env": "prod",
+                "kind": "http.request",
+                "name": "poll_results",
+                "route": "/api/v1/polls/{poll_id}/results",
+                "method": "GET",
+                "labels": {"traffic": "synthetic"},
+            },
+            now=0.0,
+        )
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["alert_class"], "route_seen_after_quiet_period")
 
     def test_synthetic_check_opens_dedupes_and_resolves(self) -> None:
         engine = AlertRuleEngine(

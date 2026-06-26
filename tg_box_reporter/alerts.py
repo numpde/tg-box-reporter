@@ -6,6 +6,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Iterable, Mapping, Pattern
 
+SYNTHETIC_HAPPYPATH_CHECK = "happypath"
+SYNTHETIC_TRAFFIC_LABEL = "traffic"
+SYNTHETIC_TRAFFIC_LABEL_VALUE = "synthetic"
+SYNTHETIC_CHECK_LABEL = "synthetic_check"
+
 
 def _format_duration(seconds: float) -> str:
     total = max(0, int(round(seconds)))
@@ -155,6 +160,18 @@ def _synthetic_check_result(event: Mapping[str, object]) -> str | None:
     return None
 
 
+def _is_synthetic_traffic_event(event: Mapping[str, object]) -> bool:
+    labels = dict(event.get("labels") or {})
+    # Low-trust producer label: this suppresses only route-discovery notices.
+    # It must not affect synthetic.check alerts or route error-rate alerts.
+    return (
+        str(labels.get(SYNTHETIC_TRAFFIC_LABEL) or "").strip().lower()
+        == SYNTHETIC_TRAFFIC_LABEL_VALUE
+        and str(labels.get(SYNTHETIC_CHECK_LABEL) or "").strip().lower()
+        == SYNTHETIC_HAPPYPATH_CHECK
+    )
+
+
 class AlertRuleEngine:
     def __init__(
         self,
@@ -176,7 +193,10 @@ class AlertRuleEngine:
         route_key = build_route_alert_key(event)
         if route_key is not None:
             alerts.extend(self._evaluate_route_error_rate_high(route_key, event, now=now))
-            alerts.extend(self._evaluate_route_seen_after_quiet(route_key, event, now=now))
+            # Synthetic HTTP calls have their own synthetic.check lifecycle; they
+            # should not create or refresh organic route-discovery state.
+            if not _is_synthetic_traffic_event(event):
+                alerts.extend(self._evaluate_route_seen_after_quiet(route_key, event, now=now))
 
         synthetic_key = build_synthetic_check_alert_key(event)
         if synthetic_key is not None:
