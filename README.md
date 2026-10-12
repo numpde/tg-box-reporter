@@ -236,3 +236,10 @@ For host deployments, the collector process must run as a user that can talk to 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+### Container log retention
+
+Compose caps each service's Docker `json-file` logs at three 10 MiB files
+(about 30 MiB of retained log data per container, rather than a hard disk quota). Applying this setting requires recreating existing
+containers. Preserve their current images when doing so; no image upgrade is
+needed for this change.

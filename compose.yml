@@ -1,5 +1,12 @@
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   collector:
+    logging: *logging
     build:
       context: .
     image: tg-box-reporter:local
@@ -61,6 +68,7 @@ services:
       start_period: 10s
 
   relay:
+    logging: *logging
     build:
       context: .
     image: tg-box-reporter:local
