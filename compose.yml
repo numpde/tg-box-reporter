@@ -6,6 +6,8 @@ x-logging: &logging
 
 services:
   collector:
+    sysctls:
+      net.mptcp.enabled: "0"
     logging: *logging
     build:
       context: .
@@ -68,6 +70,8 @@ services:
       start_period: 10s
 
   relay:
+    sysctls:
+      net.mptcp.enabled: "0"
     logging: *logging
     build:
       context: .
